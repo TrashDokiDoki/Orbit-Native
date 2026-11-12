@@ -238,5 +238,8 @@ bool Dictation::test(const QString &pcmFile)
     QFile file(pcmFile);
     if (!file.open(QIODevice::ReadOnly)) return false;
     const std::atomic<bool> cancelled = false;
-    return recognize(file.read(audioLimit), "en", cancelled).contains("test", Qt::CaseInsensitive);
+    const auto text = recognize(file.read(audioLimit), "en", cancelled);
+    if (text.contains("one zero zero zero one", Qt::CaseInsensitive)) return true;
+    qWarning("Orbit speech fixture transcript: %s", qPrintable(text));
+    return false;
 }

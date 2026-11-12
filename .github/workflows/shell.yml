@@ -37,7 +37,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins libgtk-3-dev libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libpulse-dev libxtst-dev xvfb dpkg-dev pulseaudio pulseaudio-utils python3-dbus python3-gi espeak-ng sox
+      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins libgtk-3-dev libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libpulse-dev libxtst-dev xvfb dpkg-dev pulseaudio pulseaudio-utils python3-dbus python3-gi sox
       - name: Stage offline dictation for the native architecture
         run: python3 packaging/dictation/build-linux.py ${{ matrix.arch }} speech-bundle
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON "-DORBIT_DICTATION_BUNDLE=$PWD/speech-bundle"
@@ -66,7 +66,9 @@ jobs:
           sudo apt-get install -y ./package/orbit-native-shell_*.deb
           command -v tesseract
           tesseract --list-langs | grep -x rus
-          espeak-ng --stdout 'this is a test' | sox -t wav - -r 16000 -c 1 -e signed-integer -b 16 -L -t raw "$RUNNER_TEMP/dictation.pcm"
+          curl -fsSL https://raw.githubusercontent.com/alphacep/vosk-api/v0.3.45/python/example/test.wav -o "$RUNNER_TEMP/dictation.wav"
+          echo "dcfea5712c43a43ba7ae8083afb39d36993e5a69c46e88b68aaa72b65cb615bb  $RUNNER_TEMP/dictation.wav" | sha256sum -c
+          sox "$RUNNER_TEMP/dictation.wav" -r 16000 -c 1 -e signed-integer -b 16 -L -t raw "$RUNNER_TEMP/dictation.pcm"
           ORBIT_TEST_AUDIO=1 ORBIT_TEST_DICTATION_PCM="$RUNNER_TEMP/dictation.pcm" xvfb-run -a OrbitShell --smoke-test
           sudo apt-get remove -y orbit-native-shell
           test ! -e /usr/bin/OrbitShell
@@ -174,7 +176,7 @@ jobs:
 
       - name: Stage the native Windows payload for the combined installer
         shell: pwsh
-        run: cmake --install build --config Release --prefix windows-payload
+        run: cmake --install build --config Release --prefix "$(Join-Path (Get-Location) windows-payload)"
       - uses: actions/upload-artifact@v4
         with:
           name: OrbitShell-windows-payload-${{ matrix.arch }}
