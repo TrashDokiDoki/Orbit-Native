@@ -91,6 +91,8 @@ public:
             for (auto i = settings.begin(); i != settings.end(); ++i) settings_[i.key()] = i.value();
             for (auto i = state.begin(); i != state.end(); ++i) state_[i.key()] = i.value();
         }
+        collapse_.setSingleShot(true);
+        connect(&collapse_, &QTimer::timeout, this, &OrbitShellController::applyBounds);
         alarm_.setSingleShot(true);
         connect(&alarm_, &QTimer::timeout, this, &OrbitShellController::timerDue);
     }
@@ -102,8 +104,11 @@ public:
         if (!open(main_, "index.html", true)) { webview_destroy(main_); return 2; }
         resize(false);
         media_.changed = [this](const Track &track) { updateMedia(track); };
+        if (!testing_ || qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) media_.refresh();
         if (!testing_) {
-            media_.refresh();
+            connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
+            keyboardPoll_.start(500);
+            updateKeyboard();
             startTray();
             updateTimer_.setInterval(6 * 60 * 60 * 1000);
             updateTimer_.setTimerType(Qt::VeryCoarseTimer);
@@ -136,6 +141,39 @@ private:
         return "data:image/png;base64," + QString::fromLatin1(png.toBase64());
     }
 
+    void updateKeyboard()
+    {
+        int layout = 0;
+        bool caps = false;
+        bool inactive = false;
+        QString label;
+#ifdef Q_OS_WIN
+        const DWORD thread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+        layout = LOWORD(reinterpret_cast<quintptr>(GetKeyboardLayout(thread)));
+        wchar_t iso[16]{};
+        if (GetLocaleInfoW(MAKELCID(layout, SORT_DEFAULT), LOCALE_SISO639LANGNAME, iso, 16))
+            label = QString::fromWCharArray(iso).toUpper();
+        caps = (GetKeyState(VK_CAPITAL) & 1) != 0;
+        LASTINPUTINFO input{sizeof(LASTINPUTINFO)};
+        if (GetLastInputInfo(&input)) inactive = DWORD(GetTickCount() - input.dwTime) >= 90000;
+#elif defined(Q_OS_LINUX)
+        auto *display = gdk_display_get_default();
+        auto *keymap = display ? gdk_keymap_get_for_display(display) : nullptr;
+        if (!keymap) return;
+        caps = gdk_keymap_get_caps_lock_state(keymap);
+#endif
+        if (keyboardKnown_ && caps == caps_ && layout == layout_ && inactive == inactive_) return;
+        const bool notifyCaps = keyboardKnown_ && caps != caps_;
+        const bool notifyLayout = keyboardKnown_ && layout != layout_ && !label.isEmpty();
+        keyboardKnown_ = true;
+        caps_ = caps;
+        layout_ = layout;
+        inactive_ = inactive;
+        updateMedia(currentTrack_);
+        if (notifyCaps) emitTo(main_, "caps", caps);
+        if (notifyLayout) emitTo(main_, "layout", label);
+    }
+
     void updateMedia(const Track &track)
     {
         if (coverUrl_ != track.cover) {
@@ -164,18 +202,35 @@ private:
         }
         currentTrack_ = track;
         const auto cover = track.coverData.isEmpty() ? fetchedCover_ : track.coverData;
+        const bool coverChanged = cover != sentCover_;
+        if (coverChanged) {
+            sentCover_ = cover;
+            ++coverRevision_;
+        }
         QJsonValue media = QJsonValue::Null;
         if (!track.title.isEmpty()) {
             media = QJsonObject{
                 {"title", track.title}, {"artist", track.artist}, {"album", track.album},
-                {"playing", track.playing}, {"source", track.source}, {"cover", cover},
+                {"playing", track.playing}, {"source", track.source}, {"cover", cover}, {"coverRevision", coverRevision_},
                 {"position", track.position}, {"duration", track.duration}, {"updatedAt", track.updatedAt}
             };
         }
-        const QJsonObject snapshot{{"media", media}, {"sources", QJsonArray::fromStringList(track.sources)}};
+        const QJsonObject snapshot{{"media", media}, {"sources", QJsonArray::fromStringList(track.sources)},
+                                   {"caps", caps_}, {"layout", layout_}, {"inactive", inactive_}, {"battery", -1}};
         if (lastSystem_ == snapshot) return;
         lastSystem_ = snapshot;
-        emitTo(main_, "system", snapshot);
+        if (musicPlaying_ != track.playing) {
+            musicPlaying_ = track.playing;
+            if (!musicPlaying_) mini_ = false;
+            if (!expanded_) applyBounds();
+        }
+        auto event = snapshot;
+        if (!media.isNull() && !coverChanged && !cover.isEmpty()) {
+            auto mediaWithoutCover = media.toObject();
+            mediaWithoutCover.remove("cover");
+            event["media"] = mediaWithoutCover;
+        }
+        emitTo(main_, "system", event);
     }
 
     bool open(webview_t window, const QString &page, bool island)
@@ -208,6 +263,7 @@ private:
                 settings_["proxyPath"] = testProxy;
                 webview_init(window, "window.orbitStrictProxyTest = true;");
             }
+            if (qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) webview_init(window, "window.orbitStrictMediaTest = true;");
             if (qEnvironmentVariableIsSet("ORBIT_TEST_AUDIO")) webview_init(window, "window.orbitStrictAudioTest = true;");
             webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
@@ -241,6 +297,21 @@ private:
                       typeof mute.muted === 'boolean' && restored.muted === !mute.muted;
                   }
 
+                  let mediaTest = true;
+                  if (window.orbitStrictMediaTest) {
+                    for (let i=0; i<40 && system.media?.title !== 'Orbit test track'; i++)
+                      await new Promise(resolve=>setTimeout(resolve,100));
+                    const track = system.media;
+                    mediaTest = track?.title === 'Orbit test track' && track.artist === 'Orbit artist' &&
+                      track.album === 'Orbit album' && track.position === 27 && track.duration === 180 &&
+                      track.cover?.startsWith('data:image/png;') && system.sources.includes(track.source);
+                    if (mediaTest) {
+                      await orbit.native('media', {command:'playpause'});
+                      for (let i=0; i<40 && system.media?.playing; i++)
+                        await new Promise(resolve=>setTimeout(resolve,100));
+                      mediaTest = system.media?.playing === false;
+                    }
+                  }
                   let proxyTest = true;
                   if (window.orbitStrictProxyTest) {
                     const before = await orbit.networkToolsStatus();
@@ -250,7 +321,7 @@ private:
                   }
                   const controls = await orbit.controls('status');
                   const desktopShape = typeof controls.networkUp === 'boolean' && typeof controls.dark === 'boolean';
-                  const valid = Boolean(eqSaved && soundShape && desktopShape && proxyTest && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                  const valid = Boolean(eqSaved && soundShape && desktopShape && proxyTest && mediaTest && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
                     added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
                     document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
@@ -358,27 +429,68 @@ private:
 
     void resize(bool expanded)
     {
-#ifdef Q_OS_WIN
-        SetWindowRgn(static_cast<HWND>(webview_get_window(main_)), nullptr, TRUE);
-#endif
-        webview_set_size(main_, expanded ? 856 : 184, expanded ? 514 : 38, WEBVIEW_HINT_FIXED);
+        const bool wasExpanded = expanded_;
+        expanded_ = expanded;
+        mini_ = false;
+        collapse_.stop();
+        if (wasExpanded && !expanded) collapse_.start(360);
+        else applyBounds();
+        emitTo(main_, "expanded", expanded);
+    }
+
+    void applyBounds()
+    {
+        const auto screens = QGuiApplication::screens();
+        const auto index = settings_.value("monitor").toInt();
+        const auto *screen = screens.value(index, QGuiApplication::primaryScreen());
+        if (!screen) return;
+        const auto area = screen->availableGeometry();
+        const bool edge = settings_.value("shape").toString() == "edge";
+        const int top = edge ? screen->geometry().top() : area.top() + std::clamp(settings_.value("top").toInt(), 0, 200);
+        const double opacity = std::clamp(settings_.value("opacity").toDouble(1), .45, 1.0);
+        const auto mode = settings_.value("musicMode").toString();
+        const int compactWidth = !musicPlaying_ ? 184 : mode == "cover" ? 232 : 366;
+        const bool panel = expanded_ || collapse_.isActive();
+        const QSize size(panel ? 856 : compactWidth, panel ? 514 : mini_ ? 94 : 38);
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
-        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (lastWindowSize_ != size) SetWindowRgn(hwnd, nullptr, TRUE);
+#endif
+        if (lastWindowSize_ != size) {
+            lastWindowSize_ = size;
+            webview_set_size(main_, size.width(), size.height(), WEBVIEW_HINT_FIXED);
+        }
+        const auto position = settings_.value("position").toString();
+#ifdef Q_OS_WIN
+        // Work-area and window rectangles must use the same physical coordinates on mixed-DPI desktops.
+        const auto monitor = MonitorFromPoint(POINT{screen->geometry().left() + 1, screen->geometry().top() + 1},
+                                              MONITOR_DEFAULTTOPRIMARY);
+        MONITORINFO info{sizeof(MONITORINFO)};
         RECT bounds{};
-        if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &monitor) && GetWindowRect(hwnd, &bounds)) {
-            const auto area = monitor.rcWork;
-            const auto width = bounds.right - bounds.left;
-            SetWindowPos(hwnd, HWND_TOPMOST, (area.left + area.right - width) / 2, area.top + 12, 0, 0,
-                         SWP_NOSIZE | SWP_NOACTIVATE);
+        if (GetMonitorInfoW(monitor, &info) && GetWindowRect(hwnd, &bounds)) {
+            const double dpi = screen->devicePixelRatio();
+            const int width = bounds.right - bounds.left;
+            const int padding = qRound(16 * dpi);
+            int x = (info.rcWork.left + info.rcWork.right - width) / 2;
+            if (position == "left") x = info.rcWork.left + padding;
+            if (position == "right") x = info.rcWork.right - width - padding;
+            const int y = edge ? info.rcMonitor.top : info.rcWork.top + qRound((top - area.top()) * dpi);
+            SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        if (opacity < 1) {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
+            SetLayeredWindowAttributes(hwnd, 0, BYTE(qRound(opacity * 255)), LWA_ALPHA);
+        } else if (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & ~WS_EX_LAYERED);
         }
 #elif defined(Q_OS_LINUX)
-        if (const auto *screen = QGuiApplication::primaryScreen()) {
-            const auto area = screen->availableGeometry();
-            gtk_window_move(GTK_WINDOW(webview_get_window(main_)), area.center().x() - (expanded ? 428 : 92), area.top() + 12);
-        }
+        int x = area.x() + (area.width() - size.width()) / 2;
+        if (position == "left") x = area.left() + 16;
+        if (position == "right") x = area.right() + 1 - size.width() - 16;
+        auto *window = GTK_WINDOW(webview_get_window(main_));
+        gtk_window_move(window, x, top);
+        gtk_widget_set_opacity(GTK_WIDGET(window), opacity);
 #endif
-        emitTo(main_, "expanded", expanded);
     }
 
     void emitTo(webview_t window, const QString &event, const QJsonValue &value)
@@ -1038,6 +1150,10 @@ private:
             if (window == main_ && !lastSystem_.isEmpty()) emitTo(main_, "system", lastSystem_);
         } else if (command == "expand" && window == main_) {
             resize(first.toBool()); respond(true);
+        } else if (command == "compact-mini" && window == main_) {
+            mini_ = first.toBool() && !expanded_ && musicPlaying_;
+            if (!expanded_) applyBounds();
+            respond(mini_);
         } else if (command == "island-shape" && window == main_) {
             shape(first.toObject()); respond(true);
         } else if (command == "open-settings" && window == main_) {
@@ -1064,6 +1180,8 @@ private:
                 if (incoming.contains(i.key()) && incoming.value(i.key()).type() == i.value().type()) i.value() = incoming.value(i.key());
             }
             if (!persist()) { settings_ = previous; respond(error(QStringLiteral("Не удалось сохранить настройки"))); return; }
+            if (settings_.value("musicMode").toString() != "mini") mini_ = false;
+            applyBounds();
             emitTo(main_, "settings-changed", settings_);
             respond(QJsonObject{{"settings", settings_}, {"hotkeys", QJsonArray{}}});
         } else if (command == "notes-save" && window == main_ && first.isArray()) {
@@ -1202,9 +1320,21 @@ private:
     QJsonObject settings_, state_, update_;
     QJsonObject lastSystem_;
     Track currentTrack_;
+    QTimer collapse_;
+    QTimer keyboardPoll_;
+    int layout_ = 0;
+    bool caps_ = false;
+    bool inactive_ = false;
+    bool keyboardKnown_ = false;
+    QSize lastWindowSize_;
+    bool expanded_ = false;
+    bool mini_ = false;
+    bool musicPlaying_ = false;
     QUrl coverUrl_;
     QString fetchedCover_;
     quint64 coverRequest_ = 0;
+    qint64 coverRevision_ = 0;
+    QString sentCover_;
     webview_t main_ = nullptr, preferences_ = nullptr, editor_ = nullptr;
     QJsonObject snapshot_;
     bool capturePending_ = false;
