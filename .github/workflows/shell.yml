@@ -65,7 +65,14 @@ jobs:
       - run: cmake -S . -B build -A x64 -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON "-DORBIT_WEBVIEW2_BOOTSTRAPPER=$((Resolve-Path WebView2Setup.exe).Path -replace '\\','/')"
       - run: cmake --build build --config Release --parallel --target OrbitShell
       - run: ctest --test-dir build --build-config Release -R '^shell-ui$' --output-on-failure
-      - run: cpack --config build/CPackConfig.cmake -C Release -B package
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          cpack --config build/CPackConfig.cmake -C Release -B package
+          if ($LASTEXITCODE -ne 0) {
+            Get-ChildItem -Path package -Filter NSISOutput.log -Recurse | ForEach-Object { Get-Content $_.FullName -Tail 45 }
+            throw 'CPack could not build the Windows installer'
+          }
       - name: Install, launch and remove the Windows package
         shell: pwsh
         run: |
