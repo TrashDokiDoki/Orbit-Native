@@ -60,6 +60,7 @@
 #include <wrl.h>
 #elif defined(Q_OS_LINUX)
 #include "x11_input.h"
+#include "portal_screenshot.h"
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
 #endif
@@ -165,17 +166,85 @@ private:
         return "data:image/png;base64," + QString::fromLatin1(png.toBase64());
     }
 
+#ifdef Q_OS_WIN
+    void updateWindowsVisibility(HWND foreground, DWORD owner)
+    {
+        if (!foreground) return;
+        if (owner != GetCurrentProcessId() && foreground != lastRuleWindow_) {
+            lastRuleWindow_ = foreground;
+            foregroundName_.clear();
+            if (auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, owner)) {
+                std::array<wchar_t, 2048> name{};
+                DWORD size = DWORD(name.size());
+                if (QueryFullProcessImageNameW(process, 0, name.data(), &size))
+                    foregroundName_ = QFileInfo(QString::fromWCharArray(name.data(), size)).completeBaseName().toLower();
+                CloseHandle(process);
+            }
+        }
+        bool restricted = false;
+        for (auto name : settings_.value("restrictedApps").toString().split(QRegularExpression("[,\\r\\n]"), Qt::SkipEmptyParts)) {
+            name = name.trimmed().toLower();
+            if (name.endsWith(".exe")) name.chop(4);
+            if (!name.isEmpty() && name == foregroundName_) { restricted = true; break; }
+        }
+        if (restricted != restricted_) {
+            restricted_ = restricted;
+            updateMedia(currentTrack_);
+        }
+        if (capturePending_ || !snapshot_.isEmpty()) return;
+        const auto island = static_cast<HWND>(webview_get_window(main_));
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        RECT bounds{}, active{};
+        if (!GetMonitorInfoW(MonitorFromWindow(island, MONITOR_DEFAULTTOPRIMARY), &monitor) ||
+            !GetWindowRect(island, &bounds)) return;
+        const auto area = monitor.rcMonitor;
+        const bool fullscreen = owner != GetCurrentProcessId() && foreground != GetShellWindow() &&
+            GetWindowRect(foreground, &active) && !(GetWindowLongPtrW(foreground, GWL_STYLE) & WS_CAPTION) &&
+            active.left <= area.left && active.right >= area.right &&
+            active.top <= area.top && active.bottom >= area.bottom;
+        const bool hide = settings_.value("hideFullscreen").toBool() && fullscreen && !recording_;
+        if (hide != hiddenFullscreen_ || (hide && IsWindowVisible(island))) {
+            hiddenFullscreen_ = hide;
+            visible(main_, !hide);
+        }
+        const bool shouldHide = settings_.value("autohide").toBool() ||
+            (restricted_ && settings_.value("ruleMode").toString() == "hide");
+        if (!shouldHide && autoHidden_) {
+            autoHidden_ = false;
+            applyBounds();
+        }
+        if (hide || !shouldHide || expanded_ || mini_ || collapse_.isActive() ||
+            QDateTime::currentMSecsSinceEpoch() < indicatorUntil_) return;
+        POINT cursor{};
+        if (!GetCursorPos(&cursor)) return;
+        const bool over = cursor.x >= bounds.left && cursor.x < bounds.right &&
+            cursor.y >= area.top && cursor.y < bounds.bottom;
+        if (autoHidden_ == over) {
+            autoHidden_ = !over;
+            applyBounds();
+        }
+    }
+#endif
+
     void updateKeyboard()
     {
         int layout = 0;
         bool caps = false;
         bool inactive = false;
         QString label;
+        int battery = -1;
+        bool plugged = false;
 #ifdef Q_OS_WIN
         const auto foreground = GetForegroundWindow();
         DWORD owner = 0;
         const DWORD thread = GetWindowThreadProcessId(foreground, &owner);
         if (owner && owner != GetCurrentProcessId()) lastExternalWindow_ = foreground;
+        updateWindowsVisibility(foreground, owner);
+        SYSTEM_POWER_STATUS power{};
+        if (GetSystemPowerStatus(&power) && power.BatteryLifePercent <= 100) {
+            battery = power.BatteryLifePercent;
+            plugged = power.ACLineStatus == 1;
+        }
         layout = LOWORD(reinterpret_cast<quintptr>(GetKeyboardLayout(thread)));
         wchar_t iso[16]{};
         if (GetLocaleInfoW(MAKELCID(layout, SORT_DEFAULT), LOCALE_SISO639LANGNAME, iso, 16))
@@ -190,13 +259,20 @@ private:
         caps = gdk_keymap_get_caps_lock_state(keymap);
         if (x11Input_) std::tie(layout, label) = x11Input_->layout();
 #endif
-        if (keyboardKnown_ && caps == caps_ && layout == layout_ && inactive == inactive_) return;
+        if (keyboardKnown_ && caps == caps_ && layout == layout_ && inactive == inactive_ &&
+            battery == battery_ && plugged == plugged_) return;
         const bool notifyCaps = keyboardKnown_ && caps != caps_;
         const bool notifyLayout = keyboardKnown_ && layout != layout_ && !label.isEmpty();
         keyboardKnown_ = true;
         caps_ = caps;
         layout_ = layout;
         inactive_ = inactive;
+        battery_ = battery;
+        plugged_ = plugged;
+        if (notifyCaps || notifyLayout) {
+            indicatorUntil_ = QDateTime::currentMSecsSinceEpoch() + settings_.value("eventDuration").toInt(1650) + 50;
+            if (autoHidden_) { autoHidden_ = false; applyBounds(); }
+        }
         updateMedia(currentTrack_);
         if (notifyCaps) emitTo(main_, "caps", caps);
         if (notifyLayout) emitTo(main_, "layout", label);
@@ -244,7 +320,8 @@ private:
             };
         }
         const QJsonObject snapshot{{"media", media}, {"sources", QJsonArray::fromStringList(track.sources)},
-                                   {"caps", caps_}, {"layout", layout_}, {"inactive", inactive_}, {"battery", -1}};
+                                   {"caps", caps_}, {"layout", layout_}, {"inactive", inactive_}, {"battery", battery_},
+                                   {"plugged", plugged_}, {"restricted", restricted_}};
         if (lastSystem_ == snapshot) return;
         lastSystem_ = snapshot;
         if (musicPlaying_ != track.playing) {
@@ -681,6 +758,7 @@ private:
         const bool wasExpanded = expanded_;
         expanded_ = expanded;
         mini_ = false;
+        autoHidden_ = false;
         collapse_.stop();
         if (wasExpanded && !expanded) collapse_.start(360);
         else applyBounds();
@@ -741,7 +819,8 @@ private:
             int x = (info.rcWork.left + info.rcWork.right - width) / 2;
             if (position == "left") x = info.rcWork.left + padding;
             if (position == "right") x = info.rcWork.right - width - padding;
-            const int y = edge ? info.rcMonitor.top : info.rcWork.top + qRound((top - area.top()) * dpi);
+            const int y = autoHidden_ && !panel ? info.rcMonitor.top - (bounds.bottom - bounds.top) + qRound(9 * dpi) :
+                edge ? info.rcMonitor.top : info.rcWork.top + qRound((top - area.top()) * dpi);
             SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
         }
         const auto previous = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -1278,73 +1357,86 @@ private:
             return;
         }
         if (capturePending_ || !snapshot_.isEmpty()) { done(error(QStringLiteral("Редактор уже открыт"))); return; }
-        if (!testing_ && QGuiApplication::platformName().startsWith("wayland")) {
-            done(error(QStringLiteral("Под Wayland нужен портал захвата. Его адаптер ещё переносится.")));
-            return;
-        }
         capturePending_ = true;
         visible(main_, false);
         QTimer::singleShot(testing_ ? 0 : 220, this, [this, mode, done] {
+#ifdef Q_OS_LINUX
+            if (!testing_ && QGuiApplication::platformName().startsWith("wayland")) {
+                portalScreenshot(this, [this, mode, done](QImage image, const QString &issue) {
+                    if (!issue.isEmpty()) {
+                        closeCapture();
+                        done(error(issue));
+                        return;
+                    }
+                    openScreenshot(image, mode, done);
+                });
+                return;
+            }
+#endif
             QImage screenImage;
-            auto screens = QGuiApplication::screens();
-            const auto index = settings_.value("monitor").toInt();
-            auto *screen = index >= 0 && index < screens.size() ? screens.at(index) : QGuiApplication::primaryScreen();
+            const auto screens = QGuiApplication::screens();
+            const auto *screen = screens.value(settings_.value("monitor").toInt(), QGuiApplication::primaryScreen());
             if (testing_) {
                 screenImage = QImage(96, 64, QImage::Format_RGB32);
                 screenImage.fill(QColor("#7856aa"));
             } else if (screen) {
                 screenImage = screen->grabWindow(0).toImage();
             }
-            if (screenImage.isNull()) {
-                closeCapture();
-                done(error(QStringLiteral("Не удалось сделать снимок монитора")));
-                return;
-            }
-            if (mode == "full") {
-                if (!testing_) QApplication::clipboard()->setImage(screenImage);
-                closeCapture();
-                done(true);
-                return;
-            }
-            QBuffer png;
-            if (!png.open(QIODevice::WriteOnly) || !screenImage.save(&png, "PNG") || png.size() > 32 * 1024 * 1024) {
-                closeCapture();
-                done(error(QStringLiteral("Снимок слишком большой или недоступен")));
-                return;
-            }
-            snapshot_ = QJsonObject{{"image", QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.data().toBase64())},
-                {"mode", mode}};
-            if (!editor_) {
-                if (testing_) std::fprintf(stderr, "Orbit smoke: creating editor window\n");
-                editor_ = webview_create(false, nullptr);
-                if (testing_) std::fprintf(stderr, "Orbit smoke: initializing editor page\n");
-                if (editor_ && !open(editor_, "capture.html", false)) { webview_destroy(editor_); editor_ = nullptr; }
-            } else {
-                emitTo(editor_, "capture", snapshot_);
-            }
-            if (!editor_) {
-                closeCapture();
-                done(error(QStringLiteral("Не удалось открыть редактор")));
-                return;
-            }
-#ifdef Q_OS_WIN
-            auto hwnd = static_cast<HWND>(webview_get_window(editor_));
-            auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
-            SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~(WS_CAPTION | WS_THICKFRAME)) | WS_POPUP);
-            MONITORINFO monitor{sizeof(MONITORINFO)};
-            if (GetMonitorInfoW(MonitorFromWindow(static_cast<HWND>(webview_get_window(main_)), MONITOR_DEFAULTTOPRIMARY), &monitor)) {
-                const auto area = monitor.rcMonitor;
-                SetWindowPos(hwnd, HWND_TOPMOST, area.left, area.top, area.right-area.left, area.bottom-area.top,
-                             SWP_FRAMECHANGED | SWP_SHOWWINDOW);
-            }
-#elif defined(Q_OS_LINUX)
-            gtk_window_fullscreen(GTK_WINDOW(webview_get_window(editor_)));
-#endif
-            visible(editor_, true);
-            if (testing_) std::fprintf(stderr, "Orbit smoke: editor shown\n");
-            capturePending_ = false;
-            done(true);
+            openScreenshot(screenImage, mode, done);
         });
+    }
+
+    void openScreenshot(const QImage &screenImage, const QString &mode, const Respond &done)
+    {
+        if (screenImage.isNull()) {
+            closeCapture();
+            done(error(QStringLiteral("Не удалось сделать снимок монитора")));
+            return;
+        }
+        if (mode == "full") {
+            if (!testing_) QApplication::clipboard()->setImage(screenImage);
+            closeCapture();
+            done(true);
+            return;
+        }
+        QBuffer png;
+        if (!png.open(QIODevice::WriteOnly) || !screenImage.save(&png, "PNG") || png.size() > 32 * 1024 * 1024) {
+            closeCapture();
+            done(error(QStringLiteral("Снимок слишком большой или недоступен")));
+            return;
+        }
+        snapshot_ = QJsonObject{{"image", QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.data().toBase64())},
+            {"mode", mode}};
+        if (!editor_) {
+            if (testing_) std::fprintf(stderr, "Orbit smoke: creating editor window\n");
+            editor_ = webview_create(false, nullptr);
+            if (testing_) std::fprintf(stderr, "Orbit smoke: initializing editor page\n");
+            if (editor_ && !open(editor_, "capture.html", false)) { webview_destroy(editor_); editor_ = nullptr; }
+        } else {
+            emitTo(editor_, "capture", snapshot_);
+        }
+        if (!editor_) {
+            closeCapture();
+            done(error(QStringLiteral("Не удалось открыть редактор")));
+            return;
+        }
+#ifdef Q_OS_WIN
+        auto hwnd = static_cast<HWND>(webview_get_window(editor_));
+        auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~(WS_CAPTION | WS_THICKFRAME)) | WS_POPUP);
+        MONITORINFO monitor{sizeof(MONITORINFO)};
+        if (GetMonitorInfoW(MonitorFromWindow(static_cast<HWND>(webview_get_window(main_)), MONITOR_DEFAULTTOPRIMARY), &monitor)) {
+            const auto area = monitor.rcMonitor;
+            SetWindowPos(hwnd, HWND_TOPMOST, area.left, area.top, area.right-area.left, area.bottom-area.top,
+                         SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        }
+#elif defined(Q_OS_LINUX)
+        gtk_window_fullscreen(GTK_WINDOW(webview_get_window(editor_)));
+#endif
+        visible(editor_, true);
+        if (testing_) std::fprintf(stderr, "Orbit smoke: editor shown\n");
+        capturePending_ = false;
+        done(true);
     }
 
     static QImage decodeImage(const QString &source)
@@ -1851,6 +1943,9 @@ private:
 #ifdef Q_OS_WIN
     std::map<int, std::function<void()>> hotkeys_;
     HWND lastExternalWindow_ = nullptr;
+    HWND lastRuleWindow_ = nullptr;
+    QString foregroundName_;
+    bool hiddenFullscreen_ = false;
 #elif defined(Q_OS_LINUX)
     std::unique_ptr<X11Input> x11Input_;
 #endif
@@ -1860,6 +1955,11 @@ private:
     bool caps_ = false;
     bool inactive_ = false;
     bool keyboardKnown_ = false;
+    bool autoHidden_ = false;
+    bool restricted_ = false;
+    int battery_ = -1;
+    bool plugged_ = false;
+    qint64 indicatorUntil_ = 0;
     QSize lastWindowSize_;
     double lastScale_ = 1;
     bool expanded_ = false;
