@@ -35,6 +35,7 @@
 #include <QTimer>
 #include <QUrlQuery>
 #include <QVBoxLayout>
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <utility>
@@ -625,9 +626,9 @@ private:
     void restoreTimer()
     {
         deadline_ = settings_.value("timer/end", 0).toLongLong();
-        pausedRemaining_ = qBound<qint64>(0, settings_.value("timer/remaining", 0).toLongLong(), 86400000);
+        pausedRemaining_ = std::clamp(settings_.value("timer/remaining", 0).toLongLong(), qint64{0}, qint64{86400000});
         if (deadline_ > 0 && !pausedRemaining_) {
-            alarm_.start(int(qBound<qint64>(0, deadline_ - QDateTime::currentMSecsSinceEpoch(), 86400000)));
+            alarm_.start(int(std::clamp(deadline_ - QDateTime::currentMSecsSinceEpoch(), qint64{0}, qint64{86400000})));
         }
         updateClock();
     }
@@ -772,7 +773,7 @@ int main(int argc, char *argv[])
         QPushButton:focus { border: 1px solid #bba8ff; }
         QTabWidget::pane { background: #18171e; border: 1px solid #292832; border-radius: 12px; }
         QTabBar::tab { background: #201f26; padding: 7px 12px; margin-right: 3px; border-radius: 6px; }
-        QListWidget, QTextEdit, QLineEdit, QSpinBox { background: #201f26; border: 1px solid #302d39; border-radius: 7px; padding: 5px; }
+        QListWidget, QTextEdit, QLineEdit, QAbstractSpinBox, QComboBox { background: #201f26; border: 1px solid #302d39; border-radius: 7px; padding: 5px; }
         QDialog, QMenu { background: #17161d; }
     )");
     const bool testing = app.arguments().contains("--smoke-test");
