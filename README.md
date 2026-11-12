@@ -56,7 +56,7 @@ cmake -S . -B build -DORBIT_WEB_SHELL=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target OrbitShell --parallel
 ```
 
-Для сборки оболочки на Ubuntu нужны `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libgtk-layer-shell-dev` и `libpulse-dev`. На Windows нужен WebView2 Runtime и компилятор с C++20. CMake загружает закреплённую версию библиотеки webview 0.12.0.
+Для сборки оболочки на Ubuntu нужны `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libgtk-layer-shell-dev` и `libpulse-dev`, а для интеграции X11 нужен `libxtst-dev`. На Windows нужен WebView2 Runtime и компилятор с C++20. CMake загружает закреплённую версию библиотеки webview 0.12.0.
 
 - Плеер получает трек, состояние, обложку и позицию от медиаприложения. Синхронизированные тексты загружаются из LRCLIB. Обложка и данные зависят от того, что передаёт выбранный источник.
 - Настройки открываются в отдельном окне. Подключены масштаб и положение островка, компактный плеер, лаунчер, полка, история текста и изображений, заметки, таймер и напоминания.

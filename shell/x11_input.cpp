@@ -5,6 +5,7 @@
 #include <X11/Xatom.h>
 #include <X11/XKBlib.h>
 #include <X11/keysym.h>
+#include <X11/extensions/XTest.h>
 #include <array>
 #include <map>
 
@@ -14,6 +15,27 @@ struct X11Input::State {
     Window root = 0;
     unsigned int numLock = 0;
     std::map<std::pair<unsigned int, unsigned int>, std::function<void()>> actions;
+
+    QList<unsigned long> property(Window window, const char *name, Atom type) const
+    {
+        const auto atom = XInternAtom(display, name, True);
+        if (!atom) return {};
+        Atom actual = 0;
+        int format = 0;
+        unsigned long count = 0, remaining = 0;
+        unsigned char *data = nullptr;
+        gdk_x11_display_error_trap_push(gdkDisplay);
+        const auto status = XGetWindowProperty(display, window, atom, 0, 128, False, type,
+                                               &actual, &format, &count, &remaining, &data);
+        const auto error = gdk_x11_display_error_trap_pop(gdkDisplay);
+        QList<unsigned long> result;
+        if (!error && status == Success && data && format == 32) {
+            auto *values = reinterpret_cast<unsigned long *>(data);
+            for (unsigned long i = 0; i < count; ++i) result.append(values[i]);
+        }
+        if (data) XFree(data);
+        return result;
+    }
 
     std::array<unsigned int, 4> variants(unsigned int mods) const
     {
@@ -124,4 +146,52 @@ std::pair<int, QString> X11Input::layout() const
     if (label == "RU") return {1049, label};
     if (label == "US" || label == "GB") return {1033, "EN"};
     return label.isEmpty() ? std::pair<int, QString>{} : std::make_pair(2000 + int(keyboard.group), label);
+}
+
+X11Foreground X11Input::foreground() const
+{
+    const auto &state = *state_;
+    if (!state.display) return {};
+    const auto window = state.property(state.root, "_NET_ACTIVE_WINDOW", XA_WINDOW).value(0);
+    if (!window) return {};
+    const auto pid = state.property(window, "_NET_WM_PID", XA_CARDINAL).value(0);
+    const auto flags = state.property(window, "_NET_WM_STATE", XA_ATOM);
+    const auto fullscreen = XInternAtom(state.display, "_NET_WM_STATE_FULLSCREEN", True);
+    return {window, pid, fullscreen && flags.contains(fullscreen)};
+}
+
+bool X11Input::activate(unsigned long window) const
+{
+    const auto &state = *state_;
+    if (!state.display || !window) return false;
+    const auto atom = XInternAtom(state.display, "_NET_ACTIVE_WINDOW", True);
+    if (!atom) return false;
+    XEvent event{};
+    event.xclient.type = ClientMessage;
+    event.xclient.window = window;
+    event.xclient.message_type = atom;
+    event.xclient.format = 32;
+    event.xclient.data.l[0] = 1;
+    event.xclient.data.l[1] = CurrentTime;
+    const auto sent = XSendEvent(state.display, state.root, False,
+                                SubstructureRedirectMask | SubstructureNotifyMask, &event);
+    XFlush(state.display);
+    return sent != 0;
+}
+
+bool X11Input::paste(unsigned long window) const
+{
+    const auto &state = *state_;
+    if (!state.display || foreground().window != window) return false;
+    int event = 0, error = 0, major = 0, minor = 0;
+    if (!XTestQueryExtension(state.display, &event, &error, &major, &minor)) return false;
+    const auto control = XKeysymToKeycode(state.display, XK_Control_L);
+    const auto v = XKeysymToKeycode(state.display, XK_v);
+    if (!control || !v) return false;
+    XTestFakeKeyEvent(state.display, control, True, CurrentTime);
+    XTestFakeKeyEvent(state.display, v, True, CurrentTime);
+    XTestFakeKeyEvent(state.display, v, False, CurrentTime);
+    XTestFakeKeyEvent(state.display, control, False, CurrentTime);
+    XFlush(state.display);
+    return true;
 }

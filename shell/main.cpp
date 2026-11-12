@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QCursor>
 #include <QDrag>
 #include <QBuffer>
 #include <QFileIconProvider>
@@ -209,6 +210,39 @@ private:
         return "data:image/png;base64," + QString::fromLatin1(png.toBase64());
     }
 
+    void updateRestriction(const QString &foregroundName)
+    {
+        bool restricted = false;
+        for (auto name : settings_.value("restrictedApps").toString().split(QRegularExpression("[,\\r\\n]"), Qt::SkipEmptyParts)) {
+            name = name.trimmed().toLower();
+            if (name.endsWith(".exe")) name.chop(4);
+            if (!name.isEmpty() && name == foregroundName) { restricted = true; break; }
+        }
+        if (restricted != restricted_) {
+            restricted_ = restricted;
+            updateMedia(currentTrack_);
+        }
+    }
+
+    void updateAutohide(bool fullscreen, bool cursorOver)
+    {
+        const bool enabled = settings_.value("autohide").toBool() ||
+            (restricted_ && settings_.value("ruleMode").toString() == "hide");
+        if (!enabled) {
+            if (autoHidden_) {
+                autoHidden_ = false;
+                applyBounds();
+            }
+            return;
+        }
+        if (fullscreen || expanded_ || mini_ || collapse_.isActive() ||
+            QDateTime::currentMSecsSinceEpoch() < indicatorUntil_) return;
+        if (autoHidden_ == cursorOver) {
+            autoHidden_ = !cursorOver;
+            applyBounds();
+        }
+    }
+
 #ifdef Q_OS_WIN
     void updateWindowsVisibility(HWND foreground, DWORD owner)
     {
@@ -224,16 +258,7 @@ private:
                 CloseHandle(process);
             }
         }
-        bool restricted = false;
-        for (auto name : settings_.value("restrictedApps").toString().split(QRegularExpression("[,\\r\\n]"), Qt::SkipEmptyParts)) {
-            name = name.trimmed().toLower();
-            if (name.endsWith(".exe")) name.chop(4);
-            if (!name.isEmpty() && name == foregroundName_) { restricted = true; break; }
-        }
-        if (restricted != restricted_) {
-            restricted_ = restricted;
-            updateMedia(currentTrack_);
-        }
+        updateRestriction(foregroundName_);
         if (capturePending_ || !snapshot_.isEmpty()) return;
         const auto island = static_cast<HWND>(webview_get_window(main_));
         MONITORINFO monitor{sizeof(MONITORINFO)};
@@ -250,22 +275,42 @@ private:
             hiddenFullscreen_ = hide;
             visible(main_, !hide);
         }
-        const bool shouldHide = settings_.value("autohide").toBool() ||
-            (restricted_ && settings_.value("ruleMode").toString() == "hide");
-        if (!shouldHide && autoHidden_) {
-            autoHidden_ = false;
-            applyBounds();
-        }
-        if (hide || !shouldHide || expanded_ || mini_ || collapse_.isActive() ||
-            QDateTime::currentMSecsSinceEpoch() < indicatorUntil_) return;
         POINT cursor{};
         if (!GetCursorPos(&cursor)) return;
         const bool over = cursor.x >= bounds.left && cursor.x < bounds.right &&
             cursor.y >= area.top && cursor.y < bounds.bottom;
-        if (autoHidden_ == over) {
-            autoHidden_ = !over;
-            applyBounds();
+        updateAutohide(hide, over);
+    }
+#elif defined(Q_OS_LINUX)
+    void updateX11Visibility()
+    {
+        if (!x11Input_) return;
+        const auto active = x11Input_->foreground();
+        const auto ownPid = static_cast<unsigned long>(QCoreApplication::applicationPid());
+        if (active.window && active.pid != ownPid) {
+            lastExternalX11_ = active.window;
+            if (active.pid != lastForegroundPid_) {
+                lastForegroundPid_ = active.pid;
+                const QFileInfo image(QString("/proc/%1/exe").arg(active.pid));
+                foregroundName_ = QFileInfo(image.symLinkTarget()).completeBaseName().toLower();
+            }
         }
+        updateRestriction(foregroundName_);
+        if (capturePending_ || !snapshot_.isEmpty()) return;
+        const bool hide = settings_.value("hideFullscreen").toBool() && active.pid != ownPid && active.fullscreen && !recording_;
+        if (hide != hiddenFullscreen_ || (hide && gtk_widget_get_visible(mainGtkWindow_))) {
+            hiddenFullscreen_ = hide;
+            visible(main_, !hide);
+        }
+        int x = 0, y = 0, width = 0, height = 0;
+        gtk_window_get_position(GTK_WINDOW(mainGtkWindow_), &x, &y);
+        gtk_window_get_size(GTK_WINDOW(mainGtkWindow_), &width, &height);
+        const auto cursor = QCursor::pos();
+        const auto *screen = QGuiApplication::screens().value(settings_.value("monitor").toInt(), QGuiApplication::primaryScreen());
+        if (!screen) return;
+        const bool over = cursor.x() >= x && cursor.x() < x + width &&
+            cursor.y() >= screen->geometry().top() && cursor.y() < y + height;
+        updateAutohide(hide, over);
     }
 #endif
 
@@ -300,7 +345,10 @@ private:
         auto *keymap = display ? gdk_keymap_get_for_display(display) : nullptr;
         if (!keymap) return;
         caps = gdk_keymap_get_caps_lock_state(keymap);
-        if (x11Input_) std::tie(layout, label) = x11Input_->layout();
+        if (x11Input_) {
+            std::tie(layout, label) = x11Input_->layout();
+            updateX11Visibility();
+        }
 #endif
         if (keyboardKnown_ && caps == caps_ && layout == layout_ && inactive == inactive_ &&
             battery == battery_ && plugged == plugged_) return;
@@ -690,6 +738,12 @@ private:
             const auto sequence = QKeySequence::fromString(portable, QKeySequence::PortableText);
             if (sequence.count() == 1) {
                 const auto combination = sequence[0];
+                const auto key = combination.key();
+                if (combination.keyboardModifiers() == Qt::NoModifier &&
+                    (key < Qt::Key_F1 || key > Qt::Key_F24)) {
+                    unavailableHotkeys_.append(shortcut);
+                    return;
+                }
 #ifdef Q_OS_WIN
                 Q_UNUSED(id);
                 Q_UNUSED(description);
@@ -699,7 +753,6 @@ private:
                     (modifiers.testFlag(Qt::AltModifier) ? MOD_ALT : 0) |
                     (modifiers.testFlag(Qt::ShiftModifier) ? MOD_SHIFT : 0) |
                     (modifiers.testFlag(Qt::MetaModifier) ? MOD_WIN : 0);
-                const int key = combination.key();
                 UINT vk = 0;
                 if ((key >= Qt::Key_A && key <= Qt::Key_Z) || (key >= Qt::Key_0 && key <= Qt::Key_9) ||
                     key == Qt::Key_Space) vk = UINT(key);
@@ -1009,7 +1062,10 @@ private:
             gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_LEFT, position == "left" ? 16 : 0);
             gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_RIGHT, position == "right" ? 16 : 0);
             gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_TOP, edge ? 0 : top - area.top());
-        } else gtk_window_move(window, x, top);
+        } else {
+            const int y = autoHidden_ && !panel ? screen->geometry().top() - size.height() + qRound(9 * scale) : top;
+            gtk_window_move(window, x, y);
+        }
         gtk_widget_set_opacity(GTK_WIDGET(window), opacity);
         if (auto *surface = gtk_widget_get_window(GTK_WIDGET(window))) {
             auto *region = clickThrough ? cairo_region_create() : nullptr;
@@ -1285,6 +1341,15 @@ private:
         keys[1].ki.wVk = keys[2].ki.wVk = 'V';
         keys[2].ki.dwFlags = keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
         if (SendInput(4, keys, sizeof(INPUT)) == 4) return true;
+#elif defined(Q_OS_LINUX)
+        if (x11Input_ && lastExternalX11_ && x11Input_->activate(lastExternalX11_)) {
+            const auto target = lastExternalX11_;
+            resize(false);
+            QTimer::singleShot(160, this, [this, target] {
+                if (!x11Input_->paste(target)) emitTo(main_, "error", QStringLiteral("Запись скопирована. Вставьте её сочетанием Ctrl+V."));
+            });
+            return true;
+        }
 #endif
         return error(QStringLiteral("Запись скопирована. Вставьте её сочетанием Ctrl+V."));
     }
@@ -2210,10 +2275,10 @@ private:
     std::map<int, std::function<void()>> hotkeys_;
     HWND lastExternalWindow_ = nullptr;
     HWND lastRuleWindow_ = nullptr;
-    QString foregroundName_;
-    bool hiddenFullscreen_ = false;
 #elif defined(Q_OS_LINUX)
     GtkWidget *mainGtkWindow_ = nullptr;
+    unsigned long lastExternalX11_ = 0;
+    unsigned long lastForegroundPid_ = 0;
     std::unique_ptr<X11Input> x11Input_;
     std::unique_ptr<PortalShortcuts> portalShortcuts_;
 #endif
@@ -2227,6 +2292,8 @@ private:
     bool caps_ = false;
     bool inactive_ = false;
     bool keyboardKnown_ = false;
+    QString foregroundName_;
+    bool hiddenFullscreen_ = false;
     bool autoHidden_ = false;
     bool restricted_ = false;
     int battery_ = -1;
