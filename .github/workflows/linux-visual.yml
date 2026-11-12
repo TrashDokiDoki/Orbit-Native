@@ -1,0 +1,75 @@
+name: Linux visual inspection
+
+on:
+  workflow_dispatch:
+    inputs:
+      package_run:
+        description: Successful Orbit shell package run ID
+        required: true
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: OrbitShell-linux-installer-x64
+          run-id: ${{ inputs.package_run }}
+          github-token: ${{ github.token }}
+          path: package
+      - name: Install the verified package and display tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick
+      - name: Capture the compact island, main panel and preferences
+        shell: bash
+        run: |
+          mkdir -p captures
+          xvfb-run -a -s '-screen 0 1280x960x24' bash -euo pipefail <<'EOF'
+          export QT_QPA_PLATFORM=xcb GDK_BACKEND=x11
+          profile=$(mktemp -d)
+          export XDG_CONFIG_HOME="$profile/config" XDG_DATA_HOME="$profile/data" XDG_CACHE_HOME="$profile/cache"
+          OrbitShell > captures/app.log 2>&1 &
+          app=$!
+          trap 'kill "$app" 2>/dev/null || true' EXIT
+          wait_window() {
+            local title=$1
+            for _ in {1..60}; do
+              if window=$(xdotool search --onlyvisible --name "$title" | head -n1) && [[ -n "$window" ]]; then
+                printf '%s\n' "$window"
+                return
+              fi
+              sleep .25
+            done
+            return 1
+          }
+          xdotool mousemove 1 800
+          island=$(wait_window '^Orbit Native$')
+          sleep 1
+          import -window "$island" captures/compact.png
+          xdotool mousemove --window "$island" 45 19
+          for _ in {1..24}; do
+            WIDTH=$(xdotool getwindowgeometry --shell "$island" | awk -F= '/^WIDTH=[0-9]+$/{print $2}')
+            WIDTH=${WIDTH:-0}
+            if (( WIDTH > 700 )); then break; fi
+            sleep .25
+          done
+          (( WIDTH > 700 ))
+          sleep 1
+          import -window "$island" captures/home.png
+          xdotool mousemove --window "$island" "$(( WIDTH - 39 ))" 39 click 1
+          settings=$(wait_window '^Orbit Native — Settings$')
+          sleep 1
+          import -window "$settings" captures/settings.png
+          identify captures/*.png
+          EOF
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: orbit-linux-visual-inspection
+          path: captures
+          if-no-files-found: error
