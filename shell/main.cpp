@@ -39,6 +39,7 @@
 #include <QUuid>
 #include <QVersionNumber>
 #include <algorithm>
+#include <cmath>
 #include <array>
 #include <functional>
 #include <memory>
@@ -100,14 +101,7 @@ public:
         if (!main_) return 2;
         if (!open(main_, "index.html", true)) { webview_destroy(main_); return 2; }
         resize(false);
-        media_.changed = [this](const Track &track) {
-            const auto media = track.title.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonObject{
-                {"title", track.title}, {"artist", track.artist}, {"playing", track.playing}, {"source", "MPRIS"}
-            });
-            if (lastMedia_ == media) return;
-            lastMedia_ = media;
-            emitTo(main_, "system", QJsonObject{{"media", media}});
-        };
+        media_.changed = [this](const Track &track) { updateMedia(track); };
         if (!testing_) {
             media_.refresh();
             startTray();
@@ -129,6 +123,61 @@ public:
     }
 
 private:
+    static QString coverData(QIODevice *input)
+    {
+        QImageReader decoder(input);
+        const auto size = decoder.size();
+        if (!size.isValid() || size.width() > 4096 || size.height() > 4096) return {};
+        decoder.setScaledSize(size.scaled(128, 128, Qt::KeepAspectRatio));
+        QByteArray png;
+        QBuffer output(&png);
+        output.open(QIODevice::WriteOnly);
+        if (!decoder.read().save(&output, "PNG")) return {};
+        return "data:image/png;base64," + QString::fromLatin1(png.toBase64());
+    }
+
+    void updateMedia(const Track &track)
+    {
+        if (coverUrl_ != track.cover) {
+            coverUrl_ = track.cover;
+            fetchedCover_.clear();
+            const auto revision = ++coverRequest_;
+            if (coverUrl_.isLocalFile()) {
+                QFile input(coverUrl_.toLocalFile());
+                if (input.open(QIODevice::ReadOnly) && input.size() <= 8 * 1024 * 1024)
+                    fetchedCover_ = coverData(&input);
+            } else if (coverUrl_.scheme() == "https") {
+                QNetworkRequest request(coverUrl_);
+                request.setTransferTimeout(5000);
+                auto *reply = network_.get(request);
+                connect(reply, &QIODevice::readyRead, this, [reply] {
+                    if (reply->bytesAvailable() > 8 * 1024 * 1024) reply->abort();
+                });
+                connect(reply, &QNetworkReply::finished, this, [this, reply, revision] {
+                    if (revision == coverRequest_ && reply->error() == QNetworkReply::NoError) {
+                        fetchedCover_ = coverData(reply);
+                        updateMedia(currentTrack_);
+                    }
+                    reply->deleteLater();
+                });
+            }
+        }
+        currentTrack_ = track;
+        const auto cover = track.coverData.isEmpty() ? fetchedCover_ : track.coverData;
+        QJsonValue media = QJsonValue::Null;
+        if (!track.title.isEmpty()) {
+            media = QJsonObject{
+                {"title", track.title}, {"artist", track.artist}, {"album", track.album},
+                {"playing", track.playing}, {"source", track.source}, {"cover", cover},
+                {"position", track.position}, {"duration", track.duration}, {"updatedAt", track.updatedAt}
+            };
+        }
+        const QJsonObject snapshot{{"media", media}, {"sources", QJsonArray::fromStringList(track.sources)}};
+        if (lastSystem_ == snapshot) return;
+        lastSystem_ = snapshot;
+        emitTo(main_, "system", snapshot);
+    }
+
     bool open(webview_t window, const QString &page, bool island)
     {
         const auto file = QDir(directory_).filePath(page);
@@ -863,6 +912,68 @@ private:
         });
     }
 
+    void lyrics(const QJsonObject &track, const Respond &done)
+    {
+        const auto title = track.value("title").toString().trimmed().left(250);
+        const auto artist = track.value("artist").toString().trimmed().left(250);
+        if (title.isEmpty() || artist.isEmpty()) {
+            done(error(QStringLiteral("В медиасессии нет названия или исполнителя")));
+            return;
+        }
+        QUrl url("https://lrclib.net/api/search");
+        QUrlQuery query;
+        query.addQueryItem("track_name", title);
+        query.addQueryItem("artist_name", artist);
+        url.setQuery(query);
+        QNetworkRequest request(url);
+        request.setTransferTimeout(8000);
+        request.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("Orbit/%1").arg(ORBIT_VERSION));
+        auto *reply = network_.get(request);
+        connect(reply, &QIODevice::readyRead, this, [reply] {
+            if (reply->bytesAvailable() > 8 * 1024 * 1024) reply->abort();
+        });
+        connect(reply, &QNetworkReply::finished, this, [reply, done, title, artist, track] {
+            reply->deleteLater();
+            if (reply->error() != QNetworkReply::NoError) {
+                done(error(QStringLiteral("Не удалось подключиться к LRCLIB")));
+                return;
+            }
+            const auto normalized = [](const QString &s) {
+                return s.normalized(QString::NormalizationForm_KC).trimmed().toLower();
+            };
+            const auto album = normalized(track.value("album").toString());
+            const auto duration = track.value("duration").toDouble();
+            const auto entries = QJsonDocument::fromJson(reply->readAll()).array();
+            QJsonObject best;
+            int bestScore = -1;
+            for (const auto &entry : entries) {
+                const auto candidate = entry.toObject();
+                if (normalized(candidate.value("trackName").toString()) != normalized(title) ||
+                    normalized(candidate.value("artistName").toString()) != normalized(artist)) continue;
+                const bool close = std::abs(candidate.value("duration").toDouble() - duration) <= 3;
+                const bool sameAlbum = !album.isEmpty() && normalized(candidate.value("albumName").toString()) == album;
+                const bool synced = !candidate.value("syncedLyrics").toString().isEmpty();
+                const int score = (close ? 4 : 0) + (sameAlbum ? 2 : 0) + (synced ? 1 : 0);
+                if (score > bestScore) {
+                    best = candidate;
+                    bestScore = score;
+                }
+            }
+            const auto synced = best.value("syncedLyrics").toString();
+            auto text = best.value("plainLyrics").toString();
+            if (text.isEmpty())
+                text = QString(synced).remove(QRegularExpression(R"(\[\d+:\d+(?:[.:]\d+)?\])"));
+            text = text.trimmed().left(25000);
+            if (best.value("instrumental").toBool()) text = QStringLiteral("Инструментальный трек");
+            if (text.isEmpty()) text = QStringLiteral("В LRCLIB нет текста для этого трека");
+            QJsonObject result{{"text", text}};
+            if (!best.value("instrumental").toBool() && !synced.isEmpty() &&
+                (duration <= 0 || std::abs(best.value("duration").toDouble() - duration) <= 3))
+                result["synced"] = synced.left(40000);
+            done(result);
+        });
+    }
+
     void weather(const QString &city, const Respond &done)
     {
         if (testing_) { done(error("Network disabled in smoke test")); return; }
@@ -924,7 +1035,7 @@ private:
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
                     {"systemLabel", system}, {"displays", displays}, {"hotkeys", QJsonArray{}}});
             if (window == preferences_) emitTo(preferences_, "settings-section", QJsonObject{{"section", settingsSection_}});
-            if (window == main_ && !lastMedia_.isNull()) emitTo(main_, "system", QJsonObject{{"media", lastMedia_}});
+            if (window == main_ && !lastSystem_.isEmpty()) emitTo(main_, "system", lastSystem_);
         } else if (command == "expand" && window == main_) {
             resize(first.toBool()); respond(true);
         } else if (command == "island-shape" && window == main_) {
@@ -994,6 +1105,11 @@ private:
         } else if (command == "web") {
             const auto url = QUrl(first.toString());
             respond(url.scheme() == "http" || url.scheme() == "https" ? launch(first.toString()) : QJsonValue(error("Unsupported URL")));
+        } else if (command == "media-source" && window == main_) {
+            media_.select(first.toString());
+            respond(QJsonValue::Null);
+        } else if (command == "lyrics" && window == main_) {
+            lyrics(first.toObject(), respond);
         } else if (command == "network-tools-status" && window == main_) {
             networkToolStatus(this, settings_.value("proxyPath").toString(), respond);
         } else if (command == "network-tools-set" && window == main_ && params.at(1).isBool()) {
@@ -1084,7 +1200,11 @@ private:
     std::unique_ptr<QMenu> trayMenu_;
     QString notifiedUpdate_;
     QJsonObject settings_, state_, update_;
-    QJsonValue lastMedia_ = QJsonValue::Null;
+    QJsonObject lastSystem_;
+    Track currentTrack_;
+    QUrl coverUrl_;
+    QString fetchedCover_;
+    quint64 coverRequest_ = 0;
     webview_t main_ = nullptr, preferences_ = nullptr, editor_ = nullptr;
     QJsonObject snapshot_;
     bool capturePending_ = false;
