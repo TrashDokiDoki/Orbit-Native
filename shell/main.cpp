@@ -1,8 +1,11 @@
-#include "webview/webview.h"
 #include "media.h"
 
 #include <QApplication>
 #include <QClipboard>
+#include <QBuffer>
+#include <QFileIconProvider>
+#include <QMimeData>
+#include <QPixmap>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
@@ -15,6 +18,7 @@
 #include <QJsonObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QSaveFile>
 #include <QScreen>
 #include <QStandardPaths>
@@ -27,6 +31,7 @@
 #include <memory>
 #include <vector>
 #include <utility>
+#include "webview/webview.h"
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <commctrl.h>
@@ -56,9 +61,9 @@ QJsonObject object(const QString &file)
 
 QJsonObject error(const QString &text) { return {{"error", text}}; }
 
-class Shell final : public QObject {
+class OrbitShellController final : public QObject {
 public:
-    Shell(QString directory, bool testing)
+    OrbitShellController(QString directory, bool testing)
         : directory_(std::move(directory)), testing_(testing), media_(this),
           settings_(object(":/shell/defaults.json")), state_(object(":/shell/emptyState.json"))
     {
@@ -73,7 +78,7 @@ public:
             for (auto i = state.begin(); i != state.end(); ++i) state_[i.key()] = i.value();
         }
         alarm_.setSingleShot(true);
-        connect(&alarm_, &QTimer::timeout, this, &Shell::timerDue);
+        connect(&alarm_, &QTimer::timeout, this, &OrbitShellController::timerDue);
     }
 
     int run()
@@ -90,7 +95,10 @@ public:
             lastMedia_ = media;
             emitTo(main_, "system", QJsonObject{{"media", media}});
         };
-        if (!testing_) media_.refresh();
+        if (!testing_) {
+            media_.refresh();
+            connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &OrbitShellController::captureClipboard);
+        }
         if (testing_) QTimer::singleShot(20000, this, [this] { webview_terminate(main_); });
         scheduleTimer();
         webview_run(main_);
@@ -124,15 +132,16 @@ private:
                   await orbit.expand(true);
                   const notes = [{id:'qa',name:'Orbit QA',folder:'Local',text:'Save and load'}];
                   await orbit.notesSave(notes);
+                  const added = await orbit.reminder('add', {text:'Orbit QA',at:Date.now()+60000,repeat:'once'});
                   const stored = await orbit.get();
-                  const valid = Boolean(initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                  const valid = Boolean(initial.settings && stored.state.notes[0]?.text === notes[0].text && added[0]?.text === 'Orbit QA' &&
                     document.querySelector('#island.expanded') && document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
                   window.orbitShellTest(valid);
                 });
             )JS");
             webview_bind(window, "orbitShellTest", [](const char *id, const char *args, void *data) {
-                auto *self = static_cast<Shell *>(data);
+                auto *self = static_cast<OrbitShellController *>(data);
                 self->passed_ = QJsonDocument::fromJson(args).array().at(0).toBool();
                 webview_return(self->main_, id, 0, "null");
                 webview_terminate(self->main_);
@@ -224,22 +233,184 @@ private:
     void scheduleTimer()
     {
         alarm_.stop();
+        const auto now = QDateTime::currentMSecsSinceEpoch();
         const auto timer = state_.value("timer").toObject();
-        if (timer.isEmpty() || timer.value("paused").toBool()) return;
-        const auto delay = timer.value("end").toInteger() - QDateTime::currentMSecsSinceEpoch();
-        alarm_.start(int(std::clamp(delay, qint64{0}, qint64{30000})));
+        qint64 next = !timer.isEmpty() && !timer.value("paused").toBool() ? timer.value("end").toInteger() : 0;
+        const auto reminders = state_.value("reminders").toArray();
+        for (const auto &item : reminders) {
+            const auto reminder = item.toObject();
+            if (reminder.value("done").toBool()) continue;
+            const auto at = reminder.value("at").toInteger();
+            if (at > 0 && (next == 0 || at < next)) next = at;
+        }
+        if (next > 0) alarm_.start(int(std::clamp(next - now, qint64{0}, qint64{30000})));
     }
 
     void timerDue()
     {
+        const auto now = QDateTime::currentDateTime();
         const auto timer = state_.value("timer").toObject();
-        if (timer.value("end").toInteger() > QDateTime::currentMSecsSinceEpoch()) { scheduleTimer(); return; }
-        state_["timer"] = QJsonValue::Null;
-        persist();
-        emitTo(main_, "state", state_);
-        resize(true);
-        emitTo(main_, "alarm", QJsonObject{{"title", QStringLiteral("Таймер завершён")}, {"kind","timer"},
-              {"body", QStringLiteral("Время вышло.")}, {"total", timer.value("total")}});
+        QJsonArray events;
+        if (!timer.isEmpty() && !timer.value("paused").toBool() && timer.value("end").toInteger() <= now.toMSecsSinceEpoch()) {
+            state_["timer"] = QJsonValue::Null;
+            events.append(QJsonObject{{"title", QStringLiteral("Таймер завершён")}, {"kind", "timer"},
+                {"body", QStringLiteral("Время вышло.")}, {"total", timer.value("total")}});
+        }
+        auto reminders = state_.value("reminders").toArray();
+        for (qsizetype i = 0; i < reminders.size(); ++i) {
+            auto reminder = reminders.at(i).toObject();
+            auto at = QDateTime::fromMSecsSinceEpoch(reminder.value("at").toInteger());
+            if (reminder.value("done").toBool() || at > now) continue;
+            events.append(QJsonObject{{"title", QStringLiteral("Напоминание")}, {"kind", "reminder"},
+                {"body", reminder.value("text")}});
+            if (reminder.value("repeat").toString() == "daily") {
+                do { at = at.addDays(1); } while (at <= now);
+                reminder["at"] = at.toMSecsSinceEpoch();
+            } else {
+                reminder["done"] = true;
+            }
+            reminders[i] = reminder;
+        }
+        if (!events.isEmpty()) {
+            state_["reminders"] = reminders;
+            persist();
+            emitTo(main_, "state", state_);
+            resize(true);
+            for (const auto &item : events) emitTo(main_, "alarm", item);
+        }
+        scheduleTimer();
+    }
+
+    QJsonValue reminder(const QString &action, QJsonObject item)
+    {
+        const auto previous = state_.value("reminders");
+        auto entries = previous.toArray();
+        if (action == "add") {
+            const auto text = item.value("text").toString().trimmed().left(500);
+            const auto at = item.value("at").toInteger();
+            if (text.isEmpty() || at <= QDateTime::currentMSecsSinceEpoch()) {
+                return error(QStringLiteral("Укажите текст и время в будущем"));
+            }
+            entries.append(QJsonObject{{"id", QUuid::createUuid().toString(QUuid::WithoutBraces)}, {"text", text},
+                {"at", at}, {"repeat", item.value("repeat").toString() == "daily" ? "daily" : "once"}, {"done", false}});
+        } else if (action == "remove") {
+            for (qsizetype i = entries.size(); i-- > 0;) {
+                if (entries.at(i).toObject().value("id") == item.value("id")) entries.removeAt(i);
+            }
+        } else {
+            return error(QStringLiteral("Неизвестное действие напоминания"));
+        }
+        state_["reminders"] = entries;
+        if (!persist()) { state_["reminders"] = previous; return error(QStringLiteral("Не удалось сохранить напоминание")); }
+        scheduleTimer();
+        return entries;
+    }
+
+    void captureClipboard()
+    {
+        if (!settings_.value("clipboard").toBool()) return;
+        const auto *mime = QApplication::clipboard()->mimeData();
+        if (!mime || !mime->hasText()) return;
+        for (const auto &format : mime->formats()) {
+            if (format.contains("password", Qt::CaseInsensitive) || format.contains("sensitive", Qt::CaseInsensitive) ||
+                format.contains("ExcludeClipboardContentFromMonitorProcessing", Qt::CaseInsensitive) ||
+                format.contains("CanIncludeInClipboardHistory", Qt::CaseInsensitive)) return;
+        }
+        const auto value = mime->text();
+        if (value.trimmed().isEmpty() || value.size() > 16000) return;
+        const auto previous = state_.value("clips");
+        auto clips = previous.toArray();
+        for (const auto &entry : std::as_const(clips)) {
+            if (entry.toObject().value("text").toString() == value) return;
+        }
+        clips.prepend(QJsonObject{{"id", QUuid::createUuid().toString(QUuid::WithoutBraces)}, {"type", "text"},
+            {"text", value}, {"at", QDateTime::currentMSecsSinceEpoch()}, {"pinned", false}});
+        int unpinned = 0;
+        for (qsizetype i = 0; i < clips.size();) {
+            if (!clips.at(i).toObject().value("pinned").toBool() && ++unpinned > 60) clips.removeAt(i);
+            else ++i;
+        }
+        state_["clips"] = clips;
+        if (persist()) emitTo(main_, "clips", clips);
+        else state_["clips"] = previous;
+    }
+
+    QJsonValue clipAction(const QString &id, const QString &action)
+    {
+        const auto previous = state_.value("clips");
+        auto entries = previous.toArray();
+        if (action == "clear") {
+            for (qsizetype i = entries.size(); i-- > 0;) {
+                if (!entries.at(i).toObject().value("pinned").toBool()) entries.removeAt(i);
+            }
+        } else {
+            for (qsizetype i = 0; i < entries.size(); ++i) {
+                auto entry = entries.at(i).toObject();
+                if (entry.value("id").toString() != id) continue;
+                if (action == "copy") {
+                    QApplication::clipboard()->setText(entry.value("text").toString());
+                    return true;
+                }
+                if (action == "pin") {
+                    entry["pinned"] = !entry.value("pinned").toBool();
+                    entries[i] = entry;
+                } else if (action == "delete") entries.removeAt(i);
+                else return error(QStringLiteral("Автовставка ещё переносится. Используйте кнопку «Копировать»."));
+                break;
+            }
+        }
+        state_["clips"] = entries;
+        if (!persist()) { state_["clips"] = previous; return error(QStringLiteral("Не удалось сохранить историю")); }
+        emitTo(main_, "clips", entries);
+        return entries;
+    }
+
+    QJsonValue shelfAdd()
+    {
+        const auto files = QFileDialog::getOpenFileNames(nullptr, QStringLiteral("Добавить на полку"));
+        const auto previous = state_.value("shelf");
+        auto entries = previous.toArray();
+        for (const auto &file : files) {
+            bool exists = false;
+            for (const auto &entry : std::as_const(entries)) exists |= entry.toObject().value("path").toString() == file;
+            if (!exists) entries.append(QJsonObject{{"id", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                {"name", QFileInfo(file).fileName()}, {"path", file}});
+        }
+        state_["shelf"] = entries;
+        if (!persist()) { state_["shelf"] = previous; return error(QStringLiteral("Не удалось сохранить полку")); }
+        return entries;
+    }
+
+    QJsonValue shelfAction(const QString &id, const QString &action)
+    {
+        const auto previous = state_.value("shelf");
+        auto entries = previous.toArray();
+        for (qsizetype i = 0; i < entries.size(); ++i) {
+            const auto entry = entries.at(i).toObject();
+            if (entry.value("id").toString() != id) continue;
+            const QFileInfo path(entry.value("path").toString());
+            if (action == "open") return launch(path.absoluteFilePath());
+            if (action == "reveal") return launch(path.absolutePath());
+            if (action == "remove") {
+                entries.removeAt(i);
+                state_["shelf"] = entries;
+                if (!persist()) { state_["shelf"] = previous; return error(QStringLiteral("Не удалось сохранить полку")); }
+                return entries;
+            }
+        }
+        return error(QStringLiteral("Файл не найден на полке"));
+    }
+
+    QString fileIcon(const QString &path)
+    {
+        bool known = false;
+        const auto shelf = state_.value("shelf").toArray();
+        for (const auto &entry : shelf) known |= entry.toObject().value("path").toString() == path;
+        if (!known || !QFileInfo::exists(path)) return {};
+        const auto icon = QFileIconProvider().icon(QFileInfo(path)).pixmap(48, 48);
+        QBuffer png;
+        if (!png.open(QIODevice::WriteOnly) || !icon.save(&png, "PNG")) return {};
+        return QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.data().toBase64());
     }
 
     QJsonValue timer(const QJsonObject &command)
@@ -326,7 +497,7 @@ private:
         return error(QStringLiteral("Не удалось открыть ярлык"));
     }
 
-    struct Channel { Shell *owner; webview_t window; QString token; };
+    struct Channel { OrbitShellController *owner; webview_t window; QString token; };
 
     void receive(const Channel &channel, const QByteArray &id, const QByteArray &requestBody)
     {
@@ -378,6 +549,16 @@ private:
             weather(first.toString(), respond);
         } else if (command == "timer" && window == main_) {
             respond(timer(first.toObject()));
+        } else if (command == "reminder" && window == main_) {
+            respond(reminder(first.toString(), params.at(1).toObject()));
+        } else if (command == "clips") {
+            respond(state_.value("clips"));
+        } else if (command == "clip-action" && window == main_) {
+            respond(clipAction(first.toString(), params.at(1).toString()));
+        } else if (command == "shelf-add" && window == main_) {
+            respond(shelfAdd());
+        } else if (command == "shelf-action" && window == main_) {
+            respond(shelfAction(first.toString(), params.at(1).toString()));
         } else if (command == "copy" && first.isString()) {
             QApplication::clipboard()->setText(first.toString()); respond(true);
         } else if (command == "pick") {
@@ -398,7 +579,7 @@ private:
         } else if (command == "update-status") {
             respond(QJsonObject{{"current", ORBIT_VERSION}});
         } else if (command == "file-icon") {
-            respond(QString());
+            respond(fileIcon(first.toString()));
         } else if (command == "controls-view") {
             respond(true);
         } else if (command == "quit") {
@@ -430,6 +611,6 @@ int main(int argc, char *argv[])
     auto path = QDir(app.applicationDirPath()).filePath("orbit-shell-ui");
     const auto ui = args.indexOf("--ui");
     if (ui >= 0 && ui + 1 < args.size()) path = args.at(ui + 1);
-    Shell shell(path, args.contains("--smoke-test"));
+    OrbitShellController shell(path, args.contains("--smoke-test"));
     return shell.run();
 }
