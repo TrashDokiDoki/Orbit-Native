@@ -1,4 +1,5 @@
 #include "media.h"
+#include "audio.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -35,6 +36,7 @@
 #include <QUuid>
 #include <QVersionNumber>
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -149,6 +151,7 @@ private:
             }, this);
         }
         if (testing_ && island) {
+            if (qEnvironmentVariableIsSet("ORBIT_TEST_AUDIO")) webview_init(window, "window.orbitStrictAudioTest = true;");
             webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
                   const initial = await orbit.get();
@@ -157,7 +160,31 @@ private:
                   await orbit.notesSave(notes);
                   const added = await orbit.reminder('add', {text:'Orbit QA',at:Date.now()+60000,repeat:'once'});
                   const stored = await orbit.get();
-                  const valid = Boolean(initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                  const eq = await orbit.eqProfile([0,0,2,0,0,0,0,0,0]);
+                  const eqSaved = (await orbit.eqProfile()).gains?.[2] === 2 && eq.gains?.[2] === 2;
+                  showTab('weather');
+                  let sound = await orbit.audio('status');
+                  let soundShape = Boolean(sound.endpoints || sound.error);
+                  if (window.orbitStrictAudioTest) {
+                    for (let i=0; i<20 && !sound.endpoints; i++) {
+                      await new Promise(resolve=>setTimeout(resolve,100));
+                      sound = await orbit.audio('status');
+                    }
+                    const second = 'orbit_preview_test_second';
+                    if (!sound.endpoints?.orbit_preview_test || !sound.endpoints?.[second]) {
+                      window.orbitShellTest(false);
+                      return;
+                    }
+                    const switched = await orbit.audio('select', second);
+                    const level = await orbit.audio('level', 40);
+                    const mute = await orbit.audio('mute');
+                    const restored = await orbit.audio('mute');
+                    await orbit.audio('select', 'orbit_preview_test');
+                    soundShape = switched.id === second && level.level === 40 &&
+                      typeof mute.muted === 'boolean' && restored.muted === !mute.muted;
+                  }
+
+                  const valid = Boolean(eqSaved && soundShape && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
                     added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
                     document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
@@ -320,6 +347,37 @@ private:
             return error(QStringLiteral("Не удалось сохранить резервную копию"));
         }
         return true;
+    }
+
+    QJsonValue equalizer(const QJsonValue &request)
+    {
+        static const std::array<int, 9> frequencies{60, 120, 250, 500, 1000, 2000, 4000, 8000, 16000};
+        const auto path = QDir(QFileInfo(store_).absolutePath()).filePath("Orbit-EQ.txt");
+        if (request.isUndefined()) {
+            const auto gains = state_.value("eq").toArray();
+            return QJsonObject{{"gains", gains.isEmpty() ? QJsonArray{0,0,0,0,0,0,0,0,0} : gains}, {"file", path}};
+        }
+        const auto gains = request.toArray();
+        if (gains.size() != frequencies.size()) return error(QStringLiteral("Нужно указать девять полос эквалайзера"));
+        int peak = 0;
+        QStringList curve;
+        for (qsizetype i = 0; i < gains.size(); ++i) {
+            const auto gain = gains.at(i).toInt(100);
+            if (gain < -12 || gain > 12) return error(QStringLiteral("Усиление должно быть целым числом от −12 до 12 дБ"));
+            peak = std::max(peak, gain);
+            curve.append(QStringLiteral("%1 %2").arg(frequencies.at(i)).arg(gain));
+        }
+        if (!testing_) {
+            const auto profile = QStringLiteral("Preamp: %1 dB\nGraphicEQ: %2\n").arg(-peak).arg(curve.join("; ")).toUtf8();
+            QSaveFile file(path);
+            if (!file.open(QIODevice::WriteOnly) || file.write(profile) != profile.size() || !file.commit()) {
+                return error(QStringLiteral("Не удалось записать профиль эквалайзера"));
+            }
+        }
+        const auto previous = state_.value("eq");
+        state_["eq"] = gains;
+        if (!persist()) { state_["eq"] = previous; return error(QStringLiteral("Не удалось сохранить настройки эквалайзера")); }
+        return QJsonObject{{"gains", gains}, {"file", path}};
     }
 
     void scheduleTimer()
@@ -919,6 +977,14 @@ private:
         } else if (command == "web") {
             const auto url = QUrl(first.toString());
             respond(url.scheme() == "http" || url.scheme() == "https" ? launch(first.toString()) : QJsonValue(error("Unsupported URL")));
+        } else if (command == "audio" && window == main_) {
+            audio_.request(first.toString(), params.at(1), respond);
+        } else if (command == "eq-profile" && window == main_) {
+            respond(equalizer(first));
+        } else if (command == "native" && first.toString() == "volume" && window == main_) {
+            const auto action = params.at(1).toObject().value("command").toString();
+            if (action != "up" && action != "down" && action != "mute") { respond(error("Unsupported volume command")); return; }
+            audio_.request(action, {}, respond);
         } else if (command == "native" && first.toString() == "media") {
             const auto action = params.at(1).toObject().value("command").toString();
             if (action != "previous" && action != "next" && action != "play") { respond(error("Unsupported media command")); return; }
@@ -950,6 +1016,7 @@ private:
     QString settingsSection_ = QStringLiteral("general");
     bool testing_ = false, passed_ = false;
     Media media_;
+    Audio audio_;
     QNetworkAccessManager network_;
     QTimer alarm_, updateTimer_;
     QSystemTrayIcon *tray_ = nullptr;
