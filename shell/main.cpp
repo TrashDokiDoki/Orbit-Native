@@ -66,6 +66,7 @@
 #include "portal_shortcuts.h"
 #include <QDBusConnection>
 #include <QDBusMessage>
+#include <QDBusPendingCall>
 #include <gtk/gtk.h>
 #include <gtk-layer-shell.h>
 #include <gio/gdesktopappinfo.h>

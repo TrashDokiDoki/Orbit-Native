@@ -3,6 +3,7 @@
 
 #include <QDBusArgument>
 #include <QDBusMessage>
+#include <QDBusPendingCall>
 #include <QDBusMetaType>
 #include <QUuid>
 #include <utility>
