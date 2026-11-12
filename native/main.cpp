@@ -2,6 +2,8 @@
 #include "workspace.h"
 #include <QApplication>
 #include <QCloseEvent>
+#include <QComboBox>
+#include <QSignalBlocker>
 #include <QDateTime>
 #include <QDateTimeEdit>
 #include <QCheckBox>
@@ -19,6 +21,7 @@
 #include <QListWidget>
 #include <QLineEdit>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMimeData>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -27,11 +30,13 @@
 #include <QSettings>
 #include <QSystemTrayIcon>
 #include <QTabWidget>
+#include <QTemporaryDir>
 #include <QTextEdit>
 #include <QTimer>
 #include <QUrlQuery>
 #include <QVBoxLayout>
 #include <functional>
+#include <memory>
 #include <utility>
 
 class Island final : public QWidget {
@@ -104,6 +109,7 @@ public:
         expand(false);
         if (!testing) {
             createTray();
+            restoreTimer();
             scheduleReminders();
             updateWeather();
             weatherTimer_.start();
@@ -117,7 +123,28 @@ public:
         expand(true);
         const bool expanded = width() > 224 && !tabs_->isHidden() && tabs_->count() == 8;
         expand(false);
-        return compact && expanded && width() == 224;
+        if (!compact || !expanded || width() != 224) return false;
+        if (noteEditor_->toPlainText() != "Legacy note") return false;
+        notes_.append(QVariantMap{{"name", QStringLiteral("Second note")}, {"text", QStringLiteral("Second body")}});
+        saveNotes();
+        selectNote(1);
+        if (noteEditor_->toPlainText() != "Second body") return false;
+        noteEditor_->setPlainText("Saved edit");
+        selectNote(0);
+        if (noteEditor_->toPlainText() != "Legacy note") return false;
+        const auto saved = settings_.value("notes/items").toList();
+        if (saved.size() != 2 || saved.at(1).toMap().value("text").toString() != "Saved edit") return false;
+        startTimer(5);
+        toggleTimerPause();
+        if (alarm_.isActive() || !pausedRemaining_ || deadline_) return false;
+        const auto paused = pausedRemaining_;
+        restoreTimer();
+        if (pausedRemaining_ != paused || alarm_.isActive()) return false;
+        toggleTimerPause();
+        if (!alarm_.isActive() || pausedRemaining_ || !deadline_) return false;
+        stopTimer();
+        restoreTimer();
+        return !alarm_.isActive() && !deadline_ && !pausedRemaining_;
     }
 
 protected:
@@ -385,12 +412,82 @@ private:
     void createNotes()
     {
         auto *layout = page(tr("Заметки"));
-        auto *notes = new QTextEdit;
-        notes->setAcceptRichText(false);
-        notes->setPlaceholderText(tr("Заметка сохраняется автоматически"));
-        notes->setPlainText(settings_.value("notes/text").toString());
-        layout->addWidget(notes);
-        connect(notes, &QTextEdit::textChanged, this, [this, notes] { settings_.setValue("notes/text", notes->toPlainText()); });
+        auto *actions = new QHBoxLayout;
+        notePicker_ = new QComboBox;
+        actions->addWidget(notePicker_, 1);
+        button(actions, tr("Новая"), [this] {
+            bool ok = false;
+            const auto name = QInputDialog::getText(this, tr("Новая заметка"), tr("Название"),
+                                                    QLineEdit::Normal, tr("Моя заметка"), &ok).trimmed();
+            if (!ok || name.isEmpty()) return;
+            notes_.append(QVariantMap{{"name", name}, {"text", QString()}});
+            saveNotes();
+            selectNote(notes_.size() - 1);
+        });
+        button(actions, tr("Переименовать"), [this] {
+            const int index = notePicker_->currentIndex();
+            if (index < 0) return;
+            auto note = notes_.at(index).toMap();
+            bool ok = false;
+            const auto name = QInputDialog::getText(this, tr("Переименовать заметку"), tr("Название"),
+                                                    QLineEdit::Normal, note.value("name").toString(), &ok).trimmed();
+            if (!ok || name.isEmpty()) return;
+            note["name"] = name;
+            notes_[index] = note;
+            saveNotes();
+            selectNote(index);
+        });
+        button(actions, tr("Удалить"), [this] {
+            const int index = notePicker_->currentIndex();
+            if (index < 0) return;
+            if (QMessageBox::question(this, tr("Заметки"), tr("Удалить выбранную заметку?")) != QMessageBox::Yes) return;
+            notes_.removeAt(index);
+            saveNotes();
+            selectNote(qMin(index, int(notes_.size()) - 1));
+        });
+        layout->addLayout(actions);
+
+        noteEditor_ = new QTextEdit;
+        noteEditor_->setAcceptRichText(false);
+        noteEditor_->setPlaceholderText(tr("Заметка сохраняется автоматически"));
+        layout->addWidget(noteEditor_);
+        if (settings_.contains("notes/items")) notes_ = settings_.value("notes/items").toList();
+        else notes_.append(QVariantMap{{"name", tr("Моя заметка")}, {"text", settings_.value("notes/text").toString()}});
+        selectNote(qBound(-1, settings_.value("notes/selected", 0).toInt(), int(notes_.size()) - 1));
+        connect(notePicker_, &QComboBox::currentIndexChanged, this, [this](int index) {
+            showNote(index);
+            settings_.setValue("notes/selected", index);
+        });
+        connect(noteEditor_, &QTextEdit::textChanged, this, [this] {
+            const int index = notePicker_->currentIndex();
+            if (index < 0) return;
+            auto note = notes_.at(index).toMap();
+            note["text"] = noteEditor_->toPlainText();
+            notes_[index] = note;
+            saveNotes();
+        });
+    }
+
+    void saveNotes()
+    {
+        settings_.setValue("notes/items", notes_);
+    }
+
+    void showNote(int index)
+    {
+        const QSignalBlocker blocker(noteEditor_);
+        noteEditor_->setEnabled(index >= 0);
+        noteEditor_->setPlainText(index >= 0 ? notes_.at(index).toMap().value("text").toString() : QString());
+    }
+
+    void selectNote(int index)
+    {
+        const QSignalBlocker blocker(notePicker_);
+        notePicker_->clear();
+        for (const auto &entry : std::as_const(notes_)) notePicker_->addItem(entry.toMap().value("name").toString());
+        notePicker_->setCurrentIndex(index);
+        showNote(index);
+        settings_.setValue("notes/selected", index);
     }
 
     void createReminders()
@@ -509,23 +606,67 @@ private:
             const auto minutes = QInputDialog::getInt(this, tr("Таймер"), tr("Минуты"), 10, 1, 1440, 1, &ok);
             if (ok) startTimer(minutes);
         });
-        button(buttons, tr("Стоп"), [this] { alarm_.stop(); deadline_ = 0; updateClock(); });
+        timerPause_ = button(buttons, tr("Пауза"), [this] { toggleTimerPause(); });
+        button(buttons, tr("Стоп"), [this] { stopTimer(); });
         layout->addLayout(buttons);
         layout->addStretch();
     }
 
     void startTimer(int minutes)
     {
+        pausedRemaining_ = 0;
         const auto duration = minutes * 60000;
         deadline_ = QDateTime::currentMSecsSinceEpoch() + duration;
         alarm_.start(duration);
+        saveTimer();
+        updateClock();
+    }
+
+    void restoreTimer()
+    {
+        deadline_ = settings_.value("timer/end", 0).toLongLong();
+        pausedRemaining_ = qBound<qint64>(0, settings_.value("timer/remaining", 0).toLongLong(), 86400000);
+        if (deadline_ > 0 && !pausedRemaining_) {
+            alarm_.start(int(qBound<qint64>(0, deadline_ - QDateTime::currentMSecsSinceEpoch(), 86400000)));
+        }
+        updateClock();
+    }
+
+    void saveTimer()
+    {
+        settings_.setValue("timer/end", deadline_);
+        settings_.setValue("timer/remaining", pausedRemaining_);
+    }
+
+    void toggleTimerPause()
+    {
+        if (pausedRemaining_ > 0) {
+            deadline_ = QDateTime::currentMSecsSinceEpoch() + pausedRemaining_;
+            alarm_.start(int(pausedRemaining_));
+            pausedRemaining_ = 0;
+        } else if (deadline_ > 0) {
+            const auto remaining = deadline_ - QDateTime::currentMSecsSinceEpoch();
+            if (remaining <= 0) { finishTimer(); return; }
+            pausedRemaining_ = remaining;
+            deadline_ = 0;
+            alarm_.stop();
+        }
+        saveTimer();
+        updateClock();
+    }
+
+    void stopTimer()
+    {
+        alarm_.stop();
+        deadline_ = 0;
+        pausedRemaining_ = 0;
+        saveTimer();
         updateClock();
     }
 
     void finishTimer()
     {
-        deadline_ = 0;
-        updateClock();
+        stopTimer();
         if (tray_ && QSystemTrayIcon::supportsMessages()) tray_->showMessage("Orbit Native", tr("Время вышло"));
         expand(true);
         tabs_->setCurrentIndex(timerPage_);
@@ -536,12 +677,16 @@ private:
     {
         const auto now = QDateTime::currentDateTime();
         clock_->setText(now.time().toString("HH:mm"));
-        counter_->setVisible(deadline_ > 0);
-        if (deadline_ > 0) {
-            const auto seconds = qMax<qint64>(0, (deadline_ - now.toMSecsSinceEpoch() + 999) / 1000);
+        const bool active = deadline_ > 0 || pausedRemaining_ > 0;
+        counter_->setVisible(active);
+        timerPause_->setEnabled(active);
+        timerPause_->setText(pausedRemaining_ > 0 ? tr("Продолжить") : tr("Пауза"));
+        if (active) {
+            const auto remaining = pausedRemaining_ > 0 ? pausedRemaining_ : deadline_ - now.toMSecsSinceEpoch();
+            const auto seconds = qMax<qint64>(0, (remaining + 999) / 1000);
             const auto label = QString("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'));
             counter_->setText(label);
-            timerLabel_->setText(label);
+            timerLabel_->setText(pausedRemaining_ > 0 ? label + tr(" · Пауза") : label);
         } else {
             timerLabel_->setText(tr("Таймер не запущен"));
         }
@@ -591,11 +736,14 @@ private:
     QVBoxLayout *root_ = nullptr;
     QLabel *mascot_ = nullptr, *clock_ = nullptr, *temperature_ = nullptr, *counter_ = nullptr, *equalizer_ = nullptr;
     QLabel *title_ = nullptr, *artist_ = nullptr, *cover_ = nullptr, *weather_ = nullptr, *timerLabel_ = nullptr;
-    QPushButton *panelButton_ = nullptr;
+    QPushButton *panelButton_ = nullptr, *timerPause_ = nullptr;
     QTabWidget *tabs_ = nullptr;
     QListWidget *shelf_ = nullptr, *reminders_ = nullptr, *hours_ = nullptr, *week_ = nullptr;
     QLabel *reminderMessage_ = nullptr;
     QVariantList reminderEntries_;
+    QComboBox *notePicker_ = nullptr;
+    QTextEdit *noteEditor_ = nullptr;
+    QVariantList notes_;
     QPixmap pet_;
     QUrl coverUrl_;
     QString city_;
@@ -603,6 +751,7 @@ private:
     int timerPage_ = 0;
     int reminderPage_ = 0;
     qint64 deadline_ = 0;
+    qint64 pausedRemaining_ = 0;
     bool open_ = false;
     bool hoverEnabled_ = settings_.value("island/hover", true).toBool();
 };
@@ -627,6 +776,14 @@ int main(int argc, char *argv[])
         QDialog, QMenu { background: #17161d; }
     )");
     const bool testing = app.arguments().contains("--smoke-test");
+    std::unique_ptr<QTemporaryDir> testingProfile;
+    if (testing) {
+        testingProfile = std::make_unique<QTemporaryDir>();
+        if (!testingProfile->isValid()) return 1;
+        QSettings::setDefaultFormat(QSettings::IniFormat);
+        QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, testingProfile->path());
+        QSettings().setValue("notes/text", "Legacy note");
+    }
     Island island(testing);
     if (testing) return island.smokeTest() ? 0 : 1;
     island.show();
