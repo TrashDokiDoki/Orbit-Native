@@ -71,14 +71,20 @@ struct Apartment {
     Apartment() { init_apartment(apartment_type::multi_threaded); }
     ~Apartment() { uninit_apartment(); }
 };
+
+struct MediaRuntime {
+    Apartment apartment;
+    Manager manager{nullptr};
+};
 }
 
 Track readWindowsMedia(const QString &preferred, const Track &previous, int command)
 {
     Track track;
     try {
-        Apartment apartment;
-        const auto manager = result(Manager::RequestAsync());
+        thread_local MediaRuntime runtime;
+        auto &manager = runtime.manager;
+        if (!manager) manager = result(Manager::RequestAsync());
         if (!manager) return track;
         auto selected = manager.GetCurrentSession();
         Session active{nullptr}, preferredSession{nullptr};

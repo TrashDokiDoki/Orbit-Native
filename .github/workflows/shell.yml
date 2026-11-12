@@ -56,7 +56,7 @@ jobs:
             /usr/bin/python3 shell/tests/mpris_fixture.py "file://$PWD/resources/app/icon.png" &
             fixture=$!
             trap "kill $fixture" EXIT
-            ORBIT_TEST_AUDIO=1 ORBIT_TEST_MEDIA=1 xvfb-run -a ctest --test-dir build -R "^shell-ui$" --output-on-failure
+            ORBIT_TEST_AUDIO=1 ORBIT_TEST_MEDIA=1 ORBIT_TEST_PORTAL=1 xvfb-run -a ctest --test-dir build -R "^shell-ui$" --output-on-failure
           '
       - run: cpack --config build/CPackConfig.cmake -B package
       - name: Install, launch and remove the Debian package

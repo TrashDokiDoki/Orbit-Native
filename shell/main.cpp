@@ -102,6 +102,10 @@ public:
             for (auto i = settings.begin(); i != settings.end(); ++i) settings_[i.key()] = i.value();
             for (auto i = state.begin(); i != state.end(); ++i) state_[i.key()] = i.value();
         }
+#if defined(Q_OS_WIN) && defined(__ICoreWebView2_19_INTERFACE_DEFINED__)
+        memoryIdle_.setSingleShot(true);
+        connect(&memoryIdle_, &QTimer::timeout, this, [this] { setMemoryTarget(true); });
+#endif
         collapse_.setSingleShot(true);
         connect(&collapse_, &QTimer::timeout, this, &OrbitShellController::applyBounds);
         alarm_.setSingleShot(true);
@@ -765,8 +769,38 @@ private:
         emitTo(main_, "expanded", expanded);
     }
 
+    void refreshMemoryTarget()
+    {
+#if defined(Q_OS_WIN) && defined(__ICoreWebView2_19_INTERFACE_DEFINED__)
+        if (testing_) return;
+        if (expanded_ || mini_ || musicPlaying_ || recording_) {
+            memoryIdle_.stop();
+            setMemoryTarget(false);
+        } else if (!memoryIdle_.isActive() && !lowMemory_) {
+            memoryIdle_.start(15000);
+        }
+#endif
+    }
+
+#if defined(Q_OS_WIN) && defined(__ICoreWebView2_19_INTERFACE_DEFINED__)
+    void setMemoryTarget(bool low)
+    {
+        if (lowMemory_ == low) return;
+        using Microsoft::WRL::ComPtr;
+        auto *controller = static_cast<ICoreWebView2Controller *>(
+            webview_get_native_handle(main_, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
+        ComPtr<ICoreWebView2> browser;
+        ComPtr<ICoreWebView2_19> memory;
+        if (!controller || FAILED(controller->get_CoreWebView2(&browser)) || !browser || FAILED(browser.As(&memory))) return;
+        if (SUCCEEDED(memory->put_MemoryUsageTargetLevel(low ? COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW :
+                                                               COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL)))
+            lowMemory_ = low;
+    }
+#endif
+
     void applyBounds()
     {
+        refreshMemoryTarget();
         const auto screens = QGuiApplication::screens();
         const auto index = settings_.value("monitor").toInt();
         const auto *screen = screens.value(index, QGuiApplication::primaryScreen());
@@ -1361,7 +1395,8 @@ private:
         visible(main_, false);
         QTimer::singleShot(testing_ ? 0 : 220, this, [this, mode, done] {
 #ifdef Q_OS_LINUX
-            if (!testing_ && QGuiApplication::platformName().startsWith("wayland")) {
+            if ((!testing_ && QGuiApplication::platformName().startsWith("wayland")) ||
+                (testing_ && qEnvironmentVariableIsSet("ORBIT_TEST_PORTAL"))) {
                 portalScreenshot(this, [this, mode, done](QImage image, const QString &issue) {
                     if (!issue.isEmpty()) {
                         closeCapture();
@@ -1797,6 +1832,7 @@ private:
             respond(true);
         } else if (command == "record-state" && window == main_) {
             recording_ = first.toBool();
+            refreshMemoryTarget();
             emitTo(main_, "recording", recording_);
             respond(true);
         } else if (command == "capture" && window == main_) {
@@ -1961,6 +1997,10 @@ private:
 #endif
     QTimer collapse_;
     QTimer keyboardPoll_;
+#if defined(Q_OS_WIN) && defined(__ICoreWebView2_19_INTERFACE_DEFINED__)
+    QTimer memoryIdle_;
+    bool lowMemory_ = false;
+#endif
     int layout_ = 0;
     bool caps_ = false;
     bool inactive_ = false;

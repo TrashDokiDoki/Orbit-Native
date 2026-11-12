@@ -7,15 +7,19 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QSettings>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
+#include <algorithm>
 #include <iterator>
 
 #if defined(Q_OS_WIN)
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <winsock2.h>
 #include <windows.h>
+#include <iphlpapi.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
 #include <QWinEventNotifier>
@@ -23,12 +27,66 @@
 #include <csignal>
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <gio/gio.h>
 #endif
 
 namespace {
 QJsonObject error(const QString &message) { return {{"error", message}}; }
 
 #if defined(Q_OS_WIN)
+QString localProxyOwner()
+{
+    QSettings settings(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"),
+                       QSettings::NativeFormat);
+    if (!settings.value("ProxyEnable").toBool()) return {};
+    static const QRegularExpression loopback(QStringLiteral(R"((?:127\.0\.0\.1|localhost|\[::1\]):(\d{1,5})\b)"),
+                                             QRegularExpression::CaseInsensitiveOption);
+    QSet<unsigned int> ports;
+    auto matches = loopback.globalMatch(settings.value("ProxyServer").toString());
+    while (matches.hasNext()) {
+        const auto port = matches.next().captured(1).toUInt();
+        if (port > 0 && port <= 65535) ports.insert(port);
+    }
+    if (ports.isEmpty()) return {};
+
+    QSet<DWORD> listeners;
+    const auto inspect = [&]<typename Table>(ULONG family, auto isLocal) {
+        DWORD length = 0;
+        if (GetExtendedTcpTable(nullptr, &length, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0) !=
+            ERROR_INSUFFICIENT_BUFFER || length > 16 * 1024 * 1024) return;
+        QByteArray storage(length, Qt::Uninitialized);
+        if (GetExtendedTcpTable(storage.data(), &length, FALSE, family, TCP_TABLE_OWNER_PID_LISTENER, 0) != NO_ERROR)
+            return;
+        const auto &table = *reinterpret_cast<const Table *>(storage.constData());
+        for (DWORD index = 0; index < table.dwNumEntries; ++index) {
+            const auto &row = table.table[index];
+            if (ports.contains(ntohs(u_short(row.dwLocalPort))) && isLocal(row)) listeners.insert(row.dwOwningPid);
+        }
+    };
+    inspect.operator()<MIB_TCPTABLE_OWNER_PID>(AF_INET, [](const auto &row) {
+        return row.dwLocalAddr == 0 || (ntohl(row.dwLocalAddr) >> 24) == 127;
+    });
+    inspect.operator()<MIB_TCP6TABLE_OWNER_PID>(AF_INET6, [](const auto &row) {
+        return std::all_of(row.ucLocalAddr, row.ucLocalAddr + 15, [](auto value) { return value == 0; }) &&
+               row.ucLocalAddr[15] <= 1;
+    });
+    QString mode;
+    for (const auto pid : listeners) {
+        const auto process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (!process) continue;
+        wchar_t executable[32768];
+        DWORD length = DWORD(std::size(executable));
+        const bool found = QueryFullProcessImageNameW(process, 0, executable, &length);
+        CloseHandle(process);
+        if (!found) continue;
+        const auto path = QDir::fromNativeSeparators(QString::fromWCharArray(executable, int(length))).toLower();
+        const auto name = QFileInfo(path).completeBaseName();
+        if (path.contains("/happ/") || name == "happ") return "proxy";
+        if (name == "xray" || name == "happd" || name == "sing-box") mode = "unknown";
+    }
+    return mode;
+}
+
 QJsonValue zapretStatus()
 {
     const auto manager = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
@@ -227,15 +285,29 @@ QJsonObject happStatus()
     QSettings association(QStringLiteral("HKEY_CLASSES_ROOT\\happ\\shell\\open\\command"), QSettings::NativeFormat);
     installed = !association.value(".").toString().isEmpty() || !association.value("Default").toString().isEmpty();
 #elif defined(Q_OS_LINUX)
-    installed = !QStandardPaths::findExecutable("happ").isEmpty() || !QStandardPaths::findExecutable("Happ").isEmpty();
+    auto *application = g_app_info_get_default_for_uri_scheme("happ");
+    installed = application || !QStandardPaths::findExecutable("happ").isEmpty() ||
+                !QStandardPaths::findExecutable("Happ").isEmpty();
+    if (application) g_object_unref(application);
 #endif
-    bool tunnel = false;
+    QString adapter;
     for (const auto &network : QNetworkInterface::allInterfaces()) {
         const auto name = network.name() + " " + network.humanReadableName();
         if (network.flags().testFlag(QNetworkInterface::IsUp) &&
-            (name.contains("happ-tun", Qt::CaseInsensitive) || name.contains("happ tunnel", Qt::CaseInsensitive))) tunnel = true;
+            (name.contains("happ-tun", Qt::CaseInsensitive) || name.contains("happ-xray", Qt::CaseInsensitive) ||
+             name.contains("happ tunnel", Qt::CaseInsensitive))) {
+            adapter = network.humanReadableName();
+            break;
+        }
     }
-    return {{"installed", installed || tunnel}, {"mode", tunnel ? "tun" : "off"}};
+    if (!adapter.isEmpty()) return {{"installed", true}, {"mode", "tun"}, {"adapter", adapter}};
+#if defined(Q_OS_WIN)
+    if (installed) {
+        const auto mode = localProxyOwner();
+        if (!mode.isEmpty()) return {{"installed", true}, {"mode", mode}, {"adapter", QStringLiteral("Прокси Windows")}};
+    }
+#endif
+    return {{"installed", installed}, {"mode", "off"}};
 }
 
 bool toggleHapp()
