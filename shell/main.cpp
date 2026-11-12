@@ -632,7 +632,13 @@ private:
         else {
             webview_set_size(window, 1020, 790, WEBVIEW_HINT_NONE);
 #ifdef Q_OS_WIN
-            SetWindowSubclass(static_cast<HWND>(webview_get_window(window)), hideSecondary, 1, reinterpret_cast<DWORD_PTR>(this));
+            const auto hwnd = static_cast<HWND>(webview_get_window(window));
+            SetWindowSubclass(hwnd, hideSecondary, 1, reinterpret_cast<DWORD_PTR>(this));
+            if (page == "settings.html") {
+                const UINT dpi = GetDpiForWindow(hwnd);
+                SetWindowPos(hwnd, nullptr, 0, 0, MulDiv(1020, dpi, 96), MulDiv(790, dpi, 96),
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
 #elif defined(Q_OS_LINUX)
             g_signal_connect(webview_get_window(window), "delete-event", G_CALLBACK(+[](GtkWidget *widget, GdkEvent *, gpointer data) {
                 auto *self = static_cast<OrbitShellController *>(data);
@@ -693,6 +699,14 @@ private:
             if (self->editor_ && window == webview_get_window(self->editor_)) self->closeCapture();
             else ShowWindow(window, SW_HIDE);
             return 0;
+        }
+        if (message == WM_GETMINMAXINFO && self->preferences_ && window == webview_get_window(self->preferences_)) {
+            const auto result = DefSubclassProc(window, message, wParam, lParam);
+            auto *limits = reinterpret_cast<MINMAXINFO *>(lParam);
+            const UINT dpi = GetDpiForWindow(window);
+            limits->ptMinTrackSize.x = (std::max)(limits->ptMinTrackSize.x, LONG(MulDiv(640, dpi, 96)));
+            limits->ptMinTrackSize.y = (std::max)(limits->ptMinTrackSize.y, LONG(MulDiv(460, dpi, 96)));
+            return result;
         }
         return DefSubclassProc(window, message, wParam, lParam);
     }
