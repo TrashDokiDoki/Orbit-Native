@@ -24,7 +24,7 @@ jobs:
       - name: Install the verified package and display tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick xcompmgr x11-xserver-utils
+          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick xcompmgr x11-xserver-utils pulseaudio
       - name: Capture the compact island, main panel and preferences
         shell: bash
         run: |
@@ -39,6 +39,8 @@ jobs:
           xsetroot -solid "#263143"
           xcompmgr > captures/compositor.log 2>&1 &
           compositor=$!
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=orbit_visual sink_properties=device.description=Orbit-Visual-Audio
           OrbitShell > captures/app.log 2>&1 &
           app=$!
           trap 'kill "$app" "$compositor" 2>/dev/null || true' EXIT
@@ -56,7 +58,7 @@ jobs:
           xdotool mousemove 1 800
           island=$(wait_window '^Orbit Native$')
           sleep 1
-          import -window "$island" captures/compact.png
+          import -window root captures/compact.png
           xdotool mousemove --window "$island" 45 19
           for _ in {1..24}; do
             WIDTH=$(xdotool getwindowgeometry --shell "$island" | awk -F= '/^WIDTH=[0-9]+$/{print $2}')

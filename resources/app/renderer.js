@@ -774,7 +774,7 @@ const audioLevel = $('audio-level');
 const audioDevice = $('audio-device');
 let audioPending = false;
 const audioQueue = [];
-let displayedEndpoints = '';
+let displayedEndpoints;
 let lastVolume;
 function renderAudio(data) {
   if(Number.isFinite(data.level)&&lastVolume!==undefined&&data.level!==lastVolume&&!open)renderIndicator('♪ '+data.level+'%', 'Громкость '+data.level+' процентов');
@@ -816,7 +816,11 @@ async function changeAudio(command, value) {
     if (result.error) throw Error(result.error);
     renderAudio(result);
   } catch (error) {
-    if (command !== 'status' || !displayedEndpoints) message(error.message);
+    if (command !== 'status') message(error.message);
+    else {
+      if (displayedEndpoints === undefined) message(error.message);
+      renderAudio({});
+    }
   } finally {
     audioPending = false;
     const next = audioQueue.shift();
