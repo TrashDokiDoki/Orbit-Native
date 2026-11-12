@@ -6,6 +6,7 @@ on:
       - 'shell/**'
       - 'resources/app/**'
       - 'native/media.*'
+      - 'packaging/**'
       - 'CMakeLists.txt'
       - '.github/workflows/shell.yml'
   pull_request:
@@ -13,6 +14,7 @@ on:
       - 'shell/**'
       - 'resources/app/**'
       - 'native/media.*'
+      - 'packaging/**'
       - 'CMakeLists.txt'
       - '.github/workflows/shell.yml'
 
@@ -24,10 +26,24 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
-      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DORBIT_WEB_SHELL=ON
+      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins libgtk-3-dev libwebkit2gtk-4.1-dev xvfb dpkg-dev
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON
       - run: cmake --build build --parallel --target OrbitShell
       - run: xvfb-run -a ctest --test-dir build -R '^shell-ui$' --output-on-failure
+      - run: cpack --config build/CPackConfig.cmake -B package
+      - name: Install, launch and remove the Debian package
+        run: |
+          sudo apt-get install -y ./package/orbit-native-shell_*.deb
+          command -v tesseract
+          tesseract --list-langs | grep -x rus
+          xvfb-run -a OrbitShell --smoke-test
+          sudo apt-get remove -y orbit-native-shell
+          test ! -e /usr/bin/OrbitShell
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrbitShell-linux-installer-x64
+          path: package/*.deb
+          if-no-files-found: error
   windows:
     runs-on: windows-2025
     steps:
@@ -36,17 +52,35 @@ jobs:
         with:
           version: '6.8.3'
           arch: win64_msvc2022_64
-      - run: cmake -S . -B build -A x64 -DORBIT_WEB_SHELL=ON
-      - run: cmake --build build --config Release --parallel --target OrbitShell
-      - run: ctest --test-dir build --build-config Release -R '^shell-ui$' --output-on-failure
-      - name: Archive experimental shell for local QA
+      - run: choco install nsis --yes --no-progress
+      - name: Get signed Microsoft WebView2 bootstrapper
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path shell-preview | Out-Null
-          Copy-Item build/Release/OrbitShell.exe shell-preview/
-          Copy-Item build/Release/orbit-shell-ui shell-preview/ -Recurse
-          windeployqt --release --no-translations --no-opengl-sw shell-preview/OrbitShell.exe
+          curl.exe --fail --location --silent --show-error --output WebView2Setup.exe 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+          if ($LASTEXITCODE -ne 0) { throw 'WebView2 download failed' }
+          $signature = Get-AuthenticodeSignature -LiteralPath WebView2Setup.exe
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation') {
+            throw 'The Microsoft WebView2 bootstrapper signature could not be verified'
+          }
+      - run: cmake -S . -B build -A x64 -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON "-DORBIT_WEBVIEW2_BOOTSTRAPPER=$((Resolve-Path WebView2Setup.exe).Path -replace '\\','/')"
+      - run: cmake --build build --config Release --parallel --target OrbitShell
+      - run: ctest --test-dir build --build-config Release -R '^shell-ui$' --output-on-failure
+      - run: cpack --config build/CPackConfig.cmake -C Release -B package
+      - name: Install, launch and remove the Windows package
+        shell: pwsh
+        run: |
+          $installer = Get-Item package/OrbitShell-*-windows-x64.exe
+          $dest = Join-Path $env:RUNNER_TEMP 'OrbitShell-test'
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$dest") -WindowStyle Hidden -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exit code $($setup.ExitCode)" }
+          $exe = Join-Path $dest 'bin/OrbitShell.exe'
+          $test = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru
+          if (!$test.WaitForExit(30000)) { Stop-Process -Id $test.Id; throw 'Smoke test timed out' }
+          if ($test.ExitCode -ne 0) { throw "Smoke test exit code $($test.ExitCode)" }
+          $remove = Start-Process -FilePath (Join-Path $dest 'Uninstall.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
+          if ($remove.ExitCode -ne 0 -or (Test-Path $exe)) { throw 'Uninstall failed' }
       - uses: actions/upload-artifact@v4
         with:
-          name: OrbitShell-windows-x64
-          path: shell-preview/
+          name: OrbitShell-windows-installer-x64
+          path: package/OrbitShell-*-windows-x64.exe
+          if-no-files-found: error

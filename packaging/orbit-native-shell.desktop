@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit Native WebView Preview
+Comment=Preview of the original Orbit interface
+Exec=OrbitShell
+Icon=orbit-native-shell
+Terminal=false
+Categories=Utility;

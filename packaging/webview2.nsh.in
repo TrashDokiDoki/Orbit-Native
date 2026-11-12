@@ -1,0 +1,22 @@
+SetRegView 32
+ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+StrCmp $0 "" orbit_webview_check_user
+StrCmp $0 "0.0.0.0" orbit_webview_check_user orbit_webview_ready
+orbit_webview_check_user:
+ReadRegStr $0 HKCU "Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
+StrCmp $0 "" orbit_webview_install
+StrCmp $0 "0.0.0.0" orbit_webview_install orbit_webview_ready
+orbit_webview_install:
+InitPluginsDir
+SetOutPath "$PLUGINSDIR"
+File /oname=OrbitWebView2Setup.exe "@ORBIT_WEBVIEW2_BOOTSTRAPPER@"
+ExecWait '"$PLUGINSDIR\OrbitWebView2Setup.exe" /silent /install' $0
+Delete "$PLUGINSDIR\OrbitWebView2Setup.exe"
+StrCmp $0 "0" orbit_webview_ready
+SetRegView 64
+MessageBox MB_OK|MB_ICONSTOP "WebView2 could not be installed. Connect to the internet and run the Orbit installer again." /SD IDOK
+SetErrorLevel 3
+Abort
+orbit_webview_ready:
+SetRegView 64
+SetOutPath "$INSTDIR"

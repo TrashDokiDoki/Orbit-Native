@@ -27,9 +27,13 @@
 #include <QScreen>
 #include <QStandardPaths>
 #include <QSysInfo>
+#include <QSystemTrayIcon>
+#include <QIcon>
+#include <QMenu>
 #include <QTimer>
 #include <QUrlQuery>
 #include <QUuid>
+#include <QVersionNumber>
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -101,11 +105,18 @@ public:
         };
         if (!testing_) {
             media_.refresh();
+            startTray();
+            updateTimer_.setInterval(6 * 60 * 60 * 1000);
+            updateTimer_.setTimerType(Qt::VeryCoarseTimer);
+            connect(&updateTimer_, &QTimer::timeout, this, &OrbitShellController::notifyUpdate);
+            updateTimer_.start();
+            QTimer::singleShot(10000, this, &OrbitShellController::notifyUpdate);
             connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &OrbitShellController::captureClipboard);
         }
         if (testing_) QTimer::singleShot(20000, this, [this] { webview_terminate(main_); });
         scheduleTimer();
         webview_run(main_);
+        if (tray_) tray_->setContextMenu(nullptr);
         if (editor_) webview_destroy(editor_);
         if (preferences_) webview_destroy(preferences_);
         webview_destroy(main_);
@@ -289,8 +300,26 @@ private:
         if (testing_) return true;
         QSaveFile file(store_);
         if (!file.open(QIODevice::WriteOnly)) return false;
-        const auto body = QJsonDocument(QJsonObject{{"settings", settings_}, {"state", state_}}).toJson();
+        const auto body = backup();
         return file.write(body) == body.size() && file.commit();
+    }
+
+    QByteArray backup() const
+    {
+        return QJsonDocument(QJsonObject{{"settings", settings_}, {"state", state_}}).toJson();
+    }
+
+    QJsonValue exportBackup()
+    {
+        const auto path = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Экспорт Orbit Native"),
+                                                       "Orbit-backup.json", "JSON (*.json)");
+        if (path.isEmpty()) return false;
+        QSaveFile file(path);
+        const auto data = backup();
+        if (!file.open(QIODevice::WriteOnly) || file.write(data) != data.size() || !file.commit()) {
+            return error(QStringLiteral("Не удалось сохранить резервную копию"));
+        }
+        return true;
     }
 
     void scheduleTimer()
@@ -647,7 +676,11 @@ private:
             process->deleteLater();
         });
         QTimer::singleShot(20000, process, [process] { if (process->state() != QProcess::NotRunning) process->kill(); });
+#ifdef Q_OS_LINUX
+        process->start(executable, {path, "stdout", "-l", "rus+eng"});
+#else
         process->start(executable, {path, "stdout"});
+#endif
     }
 
     void captureResult(const QJsonObject &request, const Respond &done)
@@ -686,6 +719,60 @@ private:
         while (colors.size() > 20) colors.removeLast();
         state_["colors"] = colors;
         return persist() ? QJsonValue(true) : QJsonValue(error(QStringLiteral("Не удалось сохранить цвет")));
+    }
+
+    void startTray()
+    {
+        if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
+        tray_ = new QSystemTrayIcon(QIcon(QDir(directory_).filePath("icon.png")), this);
+        trayMenu_ = std::make_unique<QMenu>();
+        trayMenu_->addAction(QStringLiteral("Открыть Orbit"), this, [this] { visible(main_, true); resize(true); });
+        trayMenu_->addAction(QStringLiteral("Выход"), this, [this] { webview_terminate(main_); });
+        tray_->setContextMenu(trayMenu_.get());
+        tray_->setToolTip(QStringLiteral("Orbit Native"));
+        tray_->show();
+    }
+
+    void notifyUpdate()
+    {
+        checkUpdate([this](const QJsonValue &result) {
+            const auto status = result.toObject();
+            const auto version = status.value("latest").toString();
+            if (!tray_ || !status.value("available").toBool() || notifiedUpdate_ == version) return;
+            notifiedUpdate_ = version;
+            tray_->showMessage(QStringLiteral("Orbit Native"), QStringLiteral("Доступна версия %1").arg(version));
+        });
+    }
+
+    void checkUpdate(const Respond &done)
+    {
+        if (testing_) {
+            done(QJsonObject{{"current", ORBIT_VERSION}, {"latest", QJsonValue::Null}, {"available", false}});
+            return;
+        }
+        QNetworkRequest request(QUrl("https://api.github.com/repos/TrashDokiDoki/Orbit-Native/releases/latest"));
+        request.setRawHeader("Accept", "application/vnd.github+json");
+        request.setRawHeader("User-Agent", "Orbit-Native");
+        request.setTransferTimeout(10000);
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+        auto *reply = network_.get(request);
+        connect(reply, &QNetworkReply::finished, this, [this, reply, done] {
+            const auto code = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            const auto release = QJsonDocument::fromJson(reply->readAll()).object();
+            reply->deleteLater();
+            const auto tag = release.value("tag_name").toString();
+            static const QRegularExpression version(QStringLiteral("^v[0-9]+[.][0-9]+[.][0-9]+$"));
+            if (code != 404 && (code != 200 || !version.match(tag).hasMatch() ||
+                release.value("draft").toBool() || release.value("prerelease").toBool())) {
+                done(error(QStringLiteral("Не удалось проверить обновления GitHub")));
+                return;
+            }
+            const auto latest = code == 404 ? QJsonValue(QJsonValue::Null) : QJsonValue(tag.mid(1));
+            const auto newer = code == 200 && QVersionNumber::fromString(tag.mid(1)) > QVersionNumber::fromString(ORBIT_VERSION);
+            update_ = QJsonObject{{"current", ORBIT_VERSION}, {"latest", latest}, {"available", newer}};
+            emitTo(main_, "update-result", update_);
+            done(update_);
+        });
     }
 
     void request(const QUrl &url, Respond done)
@@ -838,7 +925,15 @@ private:
             media_.send(action == "previous" ? Media::Previous : action == "next" ? Media::Next : Media::PlayPause);
             respond(true);
         } else if (command == "update-status") {
-            respond(QJsonObject{{"current", ORBIT_VERSION}});
+            respond(update_.isEmpty() ? QJsonObject{{"current", ORBIT_VERSION}} : update_);
+        } else if (command == "update-check") {
+            checkUpdate(respond);
+        } else if (command == "update-open" && update_.value("available").toBool()) {
+            respond(launch(QStringLiteral("https://github.com/TrashDokiDoki/Orbit-Native/releases/tag/v") + update_.value("latest").toString()));
+        } else if (command == "data-export" && window == preferences_) {
+            respond(exportBackup());
+        } else if (command == "data-folder" && window == preferences_) {
+            respond(launch(QFileInfo(store_).absolutePath()));
         } else if (command == "file-icon") {
             respond(fileIcon(first.toString()));
         } else if (command == "controls-view") {
@@ -856,8 +951,11 @@ private:
     bool testing_ = false, passed_ = false;
     Media media_;
     QNetworkAccessManager network_;
-    QTimer alarm_;
-    QJsonObject settings_, state_;
+    QTimer alarm_, updateTimer_;
+    QSystemTrayIcon *tray_ = nullptr;
+    std::unique_ptr<QMenu> trayMenu_;
+    QString notifiedUpdate_;
+    QJsonObject settings_, state_, update_;
     QJsonValue lastMedia_ = QJsonValue::Null;
     webview_t main_ = nullptr, preferences_ = nullptr, editor_ = nullptr;
     QJsonObject snapshot_;
