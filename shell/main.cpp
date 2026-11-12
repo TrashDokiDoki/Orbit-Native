@@ -44,18 +44,22 @@
 #include <QVersionNumber>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <array>
 #include <functional>
 #include <memory>
 #include <map>
 #include <vector>
 #include <utility>
+#include <tuple>
 #include "webview/webview.h"
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
 #include <wrl.h>
 #elif defined(Q_OS_LINUX)
+#include "x11_input.h"
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
 #endif
@@ -121,6 +125,9 @@ public:
         media_.changed = [this](const Track &track) { updateMedia(track); };
         if (!testing_ || qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) media_.refresh();
         if (!testing_) {
+#ifdef Q_OS_LINUX
+            x11Input_ = std::make_unique<X11Input>();
+#endif
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
             updateKeyboard();
@@ -165,7 +172,10 @@ private:
         bool inactive = false;
         QString label;
 #ifdef Q_OS_WIN
-        const DWORD thread = GetWindowThreadProcessId(GetForegroundWindow(), nullptr);
+        const auto foreground = GetForegroundWindow();
+        DWORD owner = 0;
+        const DWORD thread = GetWindowThreadProcessId(foreground, &owner);
+        if (owner && owner != GetCurrentProcessId()) lastExternalWindow_ = foreground;
         layout = LOWORD(reinterpret_cast<quintptr>(GetKeyboardLayout(thread)));
         wchar_t iso[16]{};
         if (GetLocaleInfoW(MAKELCID(layout, SORT_DEFAULT), LOCALE_SISO639LANGNAME, iso, 16))
@@ -178,6 +188,7 @@ private:
         auto *keymap = display ? gdk_keymap_get_for_display(display) : nullptr;
         if (!keymap) return;
         caps = gdk_keymap_get_caps_lock_state(keymap);
+        if (x11Input_) std::tie(layout, label) = x11Input_->layout();
 #endif
         if (keyboardKnown_ && caps == caps_ && layout == layout_ && inactive == inactive_) return;
         const bool notifyCaps = keyboardKnown_ && caps != caps_;
@@ -280,6 +291,11 @@ private:
             }, this);
         }
         if (testing_ && island) {
+            webview_bind(window, "orbitShellTrace", [](const char *id, const char *args, void *context) {
+                std::fprintf(stderr, "Orbit smoke: %s\n", args);
+                std::fflush(stderr);
+                webview_return(static_cast<webview_t>(context), id, 0, "null");
+            }, window);
             const auto testProxy = qEnvironmentVariable("ORBIT_TEST_PROXY");
             if (validProxyFile(testProxy)) {
                 settings_["proxyPath"] = testProxy;
@@ -342,9 +358,13 @@ private:
                     proxyTest = before.proxyConfigured && !before.proxyRunning && started.proxyRunning && !stopped.proxyRunning;
                   }
                   const controls = await orbit.controls('status');
+                  await orbitShellTrace('resolve dropped paths');
                   const paths = await orbit.resolveDropPaths({files:[], getData:() => new URL('icon.png', location.href).href});
+                  await orbitShellTrace('add to shelf');
                   const shelf = await orbit.shelfAdd(paths);
+                  await orbitShellTrace('add launcher');
                   const launcher = await orbit.dropLauncher(paths);
+                  await orbitShellTrace('load file icon');
                   const dropTest = paths.length === 1 && shelf[0]?.path === paths[0] && launcher.count === 1 &&
                     (await orbit.fileIcon(paths[0]))?.startsWith?.('data:image/png;');
                   const desktopShape = typeof controls.networkUp === 'boolean' && typeof controls.dark === 'boolean';
@@ -358,6 +378,7 @@ private:
                     sources: system.sources
                   });
                   else {
+                    await orbitShellTrace('open capture editor');
                     const capture = await orbit.capture('edit');
                     if (capture?.error) window.orbitShellTest(false, {stage:'capture', capture});
                   }
@@ -477,6 +498,8 @@ private:
         const auto window = static_cast<HWND>(webview_get_window(main_));
         for (const auto &[id, callback] : hotkeys_) UnregisterHotKey(window, id);
         hotkeys_.clear();
+#elif defined(Q_OS_LINUX)
+        if (x11Input_) x11Input_->clear();
 #endif
     }
 
@@ -487,11 +510,14 @@ private:
 #ifdef Q_OS_WIN
         const auto window = static_cast<HWND>(webview_get_window(main_));
         int next = 1;
+#endif
+#if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
         const auto add = [&](const QString &shortcut, std::function<void()> action) {
             if (shortcut.isEmpty()) return;
             const auto sequence = QKeySequence::fromString(shortcut, QKeySequence::PortableText);
             if (sequence.count() == 1) {
                 const auto combination = sequence[0];
+#ifdef Q_OS_WIN
                 const auto modifiers = combination.keyboardModifiers();
                 const UINT flags = MOD_NOREPEAT |
                     (modifiers.testFlag(Qt::ControlModifier) ? MOD_CONTROL : 0) |
@@ -507,13 +533,24 @@ private:
                     hotkeys_.emplace(next++, std::move(action));
                     return;
                 }
+#elif defined(Q_OS_LINUX)
+                if (x11Input_ && x11Input_->add(combination, std::move(action))) return;
+#endif
             }
             unavailableHotkeys_.append(shortcut);
         };
-        const auto tab = [this, window](const QString &page) {
-            resize(true);
+        const auto focus = [this] {
+#ifdef Q_OS_WIN
+            const auto window = static_cast<HWND>(webview_get_window(main_));
             ShowWindow(window, SW_SHOW);
             SetForegroundWindow(window);
+#elif defined(Q_OS_LINUX)
+            gtk_window_present(GTK_WINDOW(webview_get_window(main_)));
+#endif
+        };
+        const auto tab = [this, focus](const QString &page) {
+            resize(true);
+            focus();
             emitTo(main_, "tab", page);
         };
         const auto grab = [this](const QString &mode) {
@@ -523,9 +560,9 @@ private:
             });
         };
         add(settings_.value("shortcut").toString(), [tab] { tab("search"); });
-        add("Ctrl+Alt+I", [this, window] {
+        add("Ctrl+Alt+I", [this, focus] {
             resize(!expanded_);
-            if (expanded_) SetForegroundWindow(window);
+            if (expanded_) focus();
         });
         add("Ctrl+Alt+V", [tab] { tab("clipboard"); });
         add("Ctrl+Alt+S", [grab] { grab("edit"); });
@@ -855,29 +892,73 @@ private:
     {
         if (!settings_.value("clipboard").toBool()) return;
         const auto *mime = QApplication::clipboard()->mimeData();
-        if (!mime || !mime->hasText()) return;
+        if (!mime) return;
         for (const auto &format : mime->formats()) {
             if (format.contains("password", Qt::CaseInsensitive) || format.contains("sensitive", Qt::CaseInsensitive) ||
                 format.contains("ExcludeClipboardContentFromMonitorProcessing", Qt::CaseInsensitive) ||
                 format.contains("CanIncludeInClipboardHistory", Qt::CaseInsensitive)) return;
         }
-        const auto value = mime->text();
-        if (value.trimmed().isEmpty() || value.size() > 16000) return;
+        QJsonObject item{{"id", QUuid::createUuid().toString(QUuid::WithoutBraces)},
+                         {"at", QDateTime::currentMSecsSinceEpoch()}, {"pinned", false}};
+        QString field;
+        if (mime->hasImage()) {
+            auto image = QApplication::clipboard()->image();
+            if (image.isNull() || image.sizeInBytes() > 128 * 1024 * 1024) return;
+            if (image.width() > 1200 || image.height() > 1200)
+                image = image.scaled(1200, 1200, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+            QByteArray png;
+            QBuffer output(&png);
+            if (!output.open(QIODevice::WriteOnly) || !image.save(&output, "PNG") || png.size() > 2 * 1024 * 1024) return;
+            item["type"] = "image";
+            field = "data";
+            item[field] = "data:image/png;base64," + QString::fromLatin1(png.toBase64());
+        } else if (mime->hasText()) {
+            const auto value = mime->text();
+            if (value.trimmed().isEmpty() || value.size() > 100000) return;
+            item["type"] = "text";
+            field = "text";
+            item[field] = value;
+        } else return;
         const auto previous = state_.value("clips");
         auto clips = previous.toArray();
         for (const auto &entry : std::as_const(clips)) {
-            if (entry.toObject().value("text").toString() == value) return;
+            if (entry.toObject().value(field) == item.value(field)) return;
         }
-        clips.prepend(QJsonObject{{"id", QUuid::createUuid().toString(QUuid::WithoutBraces)}, {"type", "text"},
-            {"text", value}, {"at", QDateTime::currentMSecsSinceEpoch()}, {"pinned", false}});
+        clips.prepend(item);
         int unpinned = 0;
+        qsizetype storedBytes = 0;
         for (qsizetype i = 0; i < clips.size();) {
-            if (!clips.at(i).toObject().value("pinned").toBool() && ++unpinned > 60) clips.removeAt(i);
-            else ++i;
+            const auto clip = clips.at(i).toObject();
+            const auto bytes = clip.value("data").toString().size() + 3 * clip.value("text").toString().size();
+            if (!clip.value("pinned").toBool() && (++unpinned > 60 || storedBytes + bytes > 24 * 1024 * 1024))
+                clips.removeAt(i);
+            else {
+                storedBytes += bytes;
+                ++i;
+            }
         }
         state_["clips"] = clips;
         if (persist()) emitTo(main_, "clips", clips);
         else state_["clips"] = previous;
+    }
+
+    QJsonValue pasteToPreviousWindow()
+    {
+#ifdef Q_OS_WIN
+        if (!lastExternalWindow_ || !IsWindow(lastExternalWindow_))
+            return error(QStringLiteral("Откройте окно для вставки. Запись уже скопирована."));
+        resize(false);
+        SetForegroundWindow(lastExternalWindow_);
+        if (GetForegroundWindow() != lastExternalWindow_)
+            return error(QStringLiteral("Не удалось переключить окно. Запись уже скопирована."));
+        INPUT keys[4]{};
+        for (auto &key : keys) key.type = INPUT_KEYBOARD;
+        keys[0].ki.wVk = keys[3].ki.wVk = VK_CONTROL;
+        keys[1].ki.wVk = keys[2].ki.wVk = 'V';
+        keys[2].ki.dwFlags = keys[3].ki.dwFlags = KEYEVENTF_KEYUP;
+        if (SendInput(4, keys, sizeof(INPUT)) == 4) return true;
+#endif
+        return error(QStringLiteral("Запись скопирована. Вставьте её сочетанием Ctrl+V."));
     }
 
     QJsonValue clipAction(const QString &id, const QString &action)
@@ -892,15 +973,24 @@ private:
             for (qsizetype i = 0; i < entries.size(); ++i) {
                 auto entry = entries.at(i).toObject();
                 if (entry.value("id").toString() != id) continue;
-                if (action == "copy") {
-                    QApplication::clipboard()->setText(entry.value("text").toString());
-                    return true;
+                if (action == "copy" || action == "paste") {
+                    auto *clipboard = QApplication::clipboard();
+                    if (entry.value("type").toString() == "image") {
+                        const auto data = entry.value("data").toString();
+                        const QString prefix = "data:image/png;base64,";
+                        QImage image;
+                        if (!data.startsWith(prefix) ||
+                            !image.loadFromData(QByteArray::fromBase64(data.mid(prefix.size()).toLatin1()), "PNG"))
+                            return error(QStringLiteral("Не удалось восстановить изображение"));
+                        clipboard->setImage(image);
+                    } else clipboard->setText(entry.value("text").toString());
+                    return action == "paste" ? pasteToPreviousWindow() : QJsonValue(true);
                 }
                 if (action == "pin") {
                     entry["pinned"] = !entry.value("pinned").toBool();
                     entries[i] = entry;
                 } else if (action == "delete") entries.removeAt(i);
-                else return error(QStringLiteral("Автовставка ещё переносится. Используйте кнопку «Копировать»."));
+                else return error(QStringLiteral("Неизвестное действие с буфером обмена"));
                 break;
             }
         }
@@ -1021,7 +1111,15 @@ private:
         for (const auto &entry : settings_.value("items").toArray())
             known |= entry.toObject().value("target").toString() == path;
         if (!known || !QFileInfo(path).isAbsolute() || !QFileInfo::exists(path)) return {};
+#ifdef Q_OS_WIN
+        SHFILEINFOW file{};
+        const auto nativePath = QDir::toNativeSeparators(path).toStdWString();
+        if (!SHGetFileInfoW(nativePath.c_str(), 0, &file, sizeof(file), SHGFI_ICON) || !file.hIcon) return {};
+        const auto icon = QImage::fromHICON(file.hIcon);
+        DestroyIcon(file.hIcon);
+#else
         const auto icon = QFileIconProvider().icon(QFileInfo(path)).pixmap(48, 48);
+#endif
         QBuffer png;
         if (!png.open(QIODevice::WriteOnly) || !icon.save(&png, "PNG")) return {};
         return QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.data().toBase64());
@@ -1642,6 +1740,9 @@ private:
     QJsonArray unavailableHotkeys_;
 #ifdef Q_OS_WIN
     std::map<int, std::function<void()>> hotkeys_;
+    HWND lastExternalWindow_ = nullptr;
+#elif defined(Q_OS_LINUX)
+    std::unique_ptr<X11Input> x11Input_;
 #endif
     QTimer collapse_;
     QTimer keyboardPoll_;

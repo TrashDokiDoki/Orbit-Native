@@ -50,7 +50,9 @@ if(ORBIT_WEB_SHELL)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(OrbitPulse REQUIRED IMPORTED_TARGET libpulse libpulse-mainloop-glib)
-        target_link_libraries(OrbitShell PRIVATE Qt6::DBus PkgConfig::OrbitPulse)
+        find_package(X11 REQUIRED)
+        target_sources(OrbitShell PRIVATE shell/x11_input.cpp)
+        target_link_libraries(OrbitShell PRIVATE Qt6::DBus PkgConfig::OrbitPulse X11::X11)
     endif()
     set(orbit_ui_assets
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/index.html"
