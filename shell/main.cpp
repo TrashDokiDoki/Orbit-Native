@@ -1004,7 +1004,14 @@ private:
             const cairo_rectangle_int_t row{left + inset, top + y, width - 2 * inset, 1};
             cairo_region_union_rectangle(region, &row);
         }
-        gdk_window_shape_combine_region(surface, region, 0, 0);
+        if (gdk_screen_is_composited(gtk_widget_get_screen(mainGtkWindow_))) {
+            // Keep the painted surface intact when the tab changes its height.
+            gdk_window_shape_combine_region(surface, nullptr, 0, 0);
+            gdk_window_input_shape_combine_region(surface, region, 0, 0);
+        } else {
+            gdk_window_input_shape_combine_region(surface, nullptr, 0, 0);
+            gdk_window_shape_combine_region(surface, region, 0, 0);
+        }
         cairo_region_destroy(region);
 #else
         Q_UNUSED(metrics);
