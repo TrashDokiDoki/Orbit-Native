@@ -97,7 +97,7 @@ void Media::refresh()
 void Media::inspect(QStringList players, Track fallback)
 {
     if (players.isEmpty()) {
-        player_ = preferred_;
+        player_ = fallback.source;
         pending_ = false;
         fallback.sources = sources_;
         if (changed) changed(fallback);
@@ -115,7 +115,7 @@ void Media::inspect(QStringList players, Track fallback)
             const QVariantMap state = reply.value();
             const auto metadata = qdbus_cast<QVariantMap>(state.value("Metadata"));
             Track track{metadata.value("xesam:title").toString(),
-                        metadata.value("xesam:artist").toStringList().join(", "),
+                        qdbus_cast<QStringList>(metadata.value("xesam:artist")).join(", "),
                         QUrl(metadata.value("mpris:artUrl").toString()),
                         state.value("PlaybackStatus").toString() == "Playing"};
             track.source = name;

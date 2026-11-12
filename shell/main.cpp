@@ -10,6 +10,7 @@
 #include <QMimeData>
 #include <QPixmap>
 #include <QDateTime>
+#include <QDebug>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
@@ -29,11 +30,13 @@
 #include <QNetworkRequest>
 #include <QSaveFile>
 #include <QScreen>
+#include <QSettings>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QIcon>
 #include <QMenu>
+#include <QKeySequence>
 #include <QTimer>
 #include <QUrlQuery>
 #include <QUuid>
@@ -43,6 +46,7 @@
 #include <array>
 #include <functional>
 #include <memory>
+#include <map>
 #include <vector>
 #include <utility>
 #include "webview/webview.h"
@@ -99,6 +103,15 @@ public:
 
     int run()
     {
+        gpuEnabled_ = settings_.value("gpuAcceleration").toBool(true);
+#ifdef Q_OS_WIN
+        if (!gpuEnabled_) {
+            auto arguments = qgetenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
+            if (!arguments.isEmpty()) arguments += ' ';
+            arguments += "--disable-gpu";
+            qputenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", arguments);
+        }
+#endif
         main_ = webview_create(false, nullptr);
         if (!main_) return 2;
         if (!open(main_, "index.html", true)) { webview_destroy(main_); return 2; }
@@ -109,6 +122,7 @@ public:
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
             updateKeyboard();
+            registerHotkeys();
             startTray();
             updateTimer_.setInterval(6 * 60 * 60 * 1000);
             updateTimer_.setTimerType(Qt::VeryCoarseTimer);
@@ -123,6 +137,7 @@ public:
         if (tray_) tray_->setContextMenu(nullptr);
         if (editor_) webview_destroy(editor_);
         if (preferences_) webview_destroy(preferences_);
+        clearHotkeys();
         webview_destroy(main_);
         return testing_ && !passed_ ? 1 : 0;
     }
@@ -253,7 +268,9 @@ private:
         if (testing_ && (island || page == "capture.html")) {
             webview_bind(window, "orbitShellTest", [](const char *, const char *args, void *data) {
                 auto *self = static_cast<OrbitShellController *>(data);
-                self->passed_ = QJsonDocument::fromJson(args).array().at(0).toBool();
+                const auto result = QJsonDocument::fromJson(args).array();
+                self->passed_ = result.at(0).toBool();
+                if (!self->passed_ && result.size() > 1) qWarning().noquote() << json(result.at(1));
                 webview_terminate(self->main_);
             }, this);
         }
@@ -285,7 +302,7 @@ private:
                     }
                     const second = 'orbit_preview_test_second';
                     if (!sound.endpoints?.orbit_preview_test || !sound.endpoints?.[second]) {
-                      window.orbitShellTest(false);
+                      window.orbitShellTest(false, {stage:'audio endpoints', sound});
                       return;
                     }
                     const switched = await orbit.audio('select', second);
@@ -325,7 +342,15 @@ private:
                     added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
                     document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
-                  if (!valid || (await orbit.capture('edit'))?.error) window.orbitShellTest(false);
+                  if (!valid) window.orbitShellTest(false, {
+                    eqSaved, soundShape, desktopShape, proxyTest, mediaTest,
+                    media: system.media && {...system.media, cover: Boolean(system.media.cover)},
+                    sources: system.sources
+                  });
+                  else {
+                    const capture = await orbit.capture('edit');
+                    if (capture?.error) window.orbitShellTest(false, {stage:'capture', capture});
+                  }
                 });
             )JS");
         } else if (testing_ && page == "capture.html") {
@@ -357,6 +382,11 @@ private:
             }), this);
 #endif
         }
+#ifdef Q_OS_LINUX
+        auto *browser = WEBKIT_WEB_VIEW(webview_get_native_handle(window, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
+        if (browser && !gpuEnabled_) webkit_settings_set_hardware_acceleration_policy(
+            webkit_web_view_get_settings(browser), WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
+#endif
         webview_navigate(window, address.constData());
         return true;
     }
@@ -374,10 +404,100 @@ private:
     }
 #endif
 
+    void clearHotkeys()
+    {
+#ifdef Q_OS_WIN
+        const auto window = static_cast<HWND>(webview_get_window(main_));
+        for (const auto &[id, callback] : hotkeys_) UnregisterHotKey(window, id);
+        hotkeys_.clear();
+#endif
+    }
+
+    void registerHotkeys()
+    {
+        clearHotkeys();
+        unavailableHotkeys_ = QJsonArray();
+#ifdef Q_OS_WIN
+        const auto window = static_cast<HWND>(webview_get_window(main_));
+        int next = 1;
+        const auto add = [&](const QString &shortcut, std::function<void()> action) {
+            if (shortcut.isEmpty()) return;
+            const auto sequence = QKeySequence::fromString(shortcut, QKeySequence::PortableText);
+            if (sequence.count() == 1) {
+                const auto combination = sequence[0];
+                const auto modifiers = combination.keyboardModifiers();
+                const UINT flags = MOD_NOREPEAT |
+                    (modifiers.testFlag(Qt::ControlModifier) ? MOD_CONTROL : 0) |
+                    (modifiers.testFlag(Qt::AltModifier) ? MOD_ALT : 0) |
+                    (modifiers.testFlag(Qt::ShiftModifier) ? MOD_SHIFT : 0) |
+                    (modifiers.testFlag(Qt::MetaModifier) ? MOD_WIN : 0);
+                const int key = combination.key();
+                UINT vk = 0;
+                if ((key >= Qt::Key_A && key <= Qt::Key_Z) || (key >= Qt::Key_0 && key <= Qt::Key_9) ||
+                    key == Qt::Key_Space) vk = UINT(key);
+                else if (key >= Qt::Key_F1 && key <= Qt::Key_F24) vk = VK_F1 + key - Qt::Key_F1;
+                if (vk && RegisterHotKey(window, next, flags, vk)) {
+                    hotkeys_.emplace(next++, std::move(action));
+                    return;
+                }
+            }
+            unavailableHotkeys_.append(shortcut);
+        };
+        const auto tab = [this, window](const QString &page) {
+            resize(true);
+            ShowWindow(window, SW_SHOW);
+            SetForegroundWindow(window);
+            emitTo(main_, "tab", page);
+        };
+        const auto grab = [this](const QString &mode) {
+            capture(mode, [this](QJsonValue result) {
+                const auto message = result.toObject().value("error").toString();
+                if (!message.isEmpty()) emitTo(main_, "error", message);
+            });
+        };
+        add(settings_.value("shortcut").toString(), [tab] { tab("search"); });
+        add("Ctrl+Alt+I", [this, window] {
+            resize(!expanded_);
+            if (expanded_) SetForegroundWindow(window);
+        });
+        add("Ctrl+Alt+V", [tab] { tab("clipboard"); });
+        add("Ctrl+Alt+S", [grab] { grab("edit"); });
+        add("Ctrl+Alt+O", [grab] { grab("ocr"); });
+        add("Ctrl+Alt+C", [grab] { grab("color"); });
+        add("Ctrl+Alt+Q", [grab] { grab("qr"); });
+        add("Ctrl+Alt+R", [this, tab] { tab("tools"); emitTo(main_, "record-toggle", true); });
+        for (const auto &entry : settings_.value("items").toArray()) {
+            const auto item = entry.toObject();
+            add(item.value("hotkey").toString(), [this, target = item.value("target").toString()] {
+                const auto message = launch(target).toObject().value("error").toString();
+                if (!message.isEmpty()) emitTo(main_, "error", message);
+            });
+        }
+#endif
+        emitTo(main_, "hotkeys", unavailableHotkeys_);
+    }
+
+#ifdef Q_OS_WIN
+    static LRESULT CALLBACK islandMessages(HWND window, UINT message, WPARAM wParam, LPARAM lParam,
+                                           UINT_PTR, DWORD_PTR context)
+    {
+        auto *self = reinterpret_cast<OrbitShellController *>(context);
+        if (message == WM_HOTKEY) {
+            const auto action = self->hotkeys_.find(int(wParam));
+            if (action != self->hotkeys_.end()) {
+                action->second();
+                return 0;
+            }
+        }
+        return DefSubclassProc(window, message, wParam, lParam);
+    }
+#endif
+
     void styleWindow()
     {
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
+        SetWindowSubclass(hwnd, islandMessages, 1, reinterpret_cast<DWORD_PTR>(this));
         auto *controller = static_cast<ICoreWebView2Controller *>(
             webview_get_native_handle(main_, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
         ICoreWebView2Controller2 *transparent = nullptr;
@@ -499,6 +619,36 @@ private:
         const auto script = "window.orbitNativeDispatch?.(" + json(event) + "," + json(value) + ");";
         webview_eval(window, script.constData());
     }
+
+    bool setAutostart(bool enabled)
+    {
+        if (testing_) return true;
+#ifdef Q_OS_WIN
+        QSettings startup(QStringLiteral("HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+                          QSettings::NativeFormat);
+        if (enabled) startup.setValue("OrbitNative", '"' + QDir::toNativeSeparators(QCoreApplication::applicationFilePath()) + '"');
+        else startup.remove("OrbitNative");
+        startup.sync();
+        return startup.status() == QSettings::NoError;
+#elif defined(Q_OS_LINUX)
+        const QDir directory(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
+        const auto filename = directory.filePath("autostart/orbit-native-shell.desktop");
+        if (!enabled) return !QFile::exists(filename) || QFile::remove(filename);
+        if (!directory.mkpath("autostart")) return false;
+        auto executable = QCoreApplication::applicationFilePath();
+        const QChar slash(92);
+        executable.replace(slash, QString(4, slash)).replace('%', "%%");
+        for (const auto character : {QChar(34), QChar(36), QChar(96)})
+            executable.replace(character, QString(2, slash) + character);
+        const QByteArray desktop = "[Desktop Entry]\nType=Application\nName=Orbit Native\nExec=\"" +
+                                   executable.toUtf8() + "\"\nTerminal=false\n";
+        QSaveFile file(filename);
+        return file.open(QIODevice::WriteOnly) && file.write(desktop) == desktop.size() && file.commit();
+#else
+        return !enabled;
+#endif
+    }
+
 
     bool persist()
     {
@@ -1145,7 +1295,7 @@ private:
                 displays.append(QJsonObject{{"index", int(i)}, {"label", name.isEmpty() ? QStringLiteral("Монитор %1").arg(i+1) : name}});
             }
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
-                    {"systemLabel", system}, {"displays", displays}, {"hotkeys", QJsonArray{}}});
+                    {"systemLabel", system}, {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_}});
             if (window == preferences_) emitTo(preferences_, "settings-section", QJsonObject{{"section", settingsSection_}});
             if (window == main_ && !lastSystem_.isEmpty()) emitTo(main_, "system", lastSystem_);
         } else if (command == "expand" && window == main_) {
@@ -1179,11 +1329,23 @@ private:
             for (auto i = settings_.begin(); i != settings_.end(); ++i) {
                 if (incoming.contains(i.key()) && incoming.value(i.key()).type() == i.value().type()) i.value() = incoming.value(i.key());
             }
-            if (!persist()) { settings_ = previous; respond(error(QStringLiteral("Не удалось сохранить настройки"))); return; }
+            const bool autostartChanged = previous.value("autostart") != settings_.value("autostart");
+            if (autostartChanged && !setAutostart(settings_.value("autostart").toBool())) {
+                settings_ = previous;
+                respond(error(QStringLiteral("Не удалось изменить автозапуск")));
+                return;
+            }
+            if (!persist()) {
+                if (autostartChanged) setAutostart(previous.value("autostart").toBool());
+                settings_ = previous;
+                respond(error(QStringLiteral("Не удалось сохранить настройки")));
+                return;
+            }
             if (settings_.value("musicMode").toString() != "mini") mini_ = false;
             applyBounds();
+            if (!testing_) registerHotkeys();
             emitTo(main_, "settings-changed", settings_);
-            respond(QJsonObject{{"settings", settings_}, {"hotkeys", QJsonArray{}}});
+            respond(QJsonObject{{"settings", settings_}, {"hotkeys", unavailableHotkeys_}});
         } else if (command == "notes-save" && window == main_ && first.isArray()) {
             const auto previous = state_.value("notes");
             state_["notes"] = first;
@@ -1320,6 +1482,10 @@ private:
     QJsonObject settings_, state_, update_;
     QJsonObject lastSystem_;
     Track currentTrack_;
+    QJsonArray unavailableHotkeys_;
+#ifdef Q_OS_WIN
+    std::map<int, std::function<void()>> hotkeys_;
+#endif
     QTimer collapse_;
     QTimer keyboardPoll_;
     int layout_ = 0;
@@ -1330,6 +1496,7 @@ private:
     bool expanded_ = false;
     bool mini_ = false;
     bool musicPlaying_ = false;
+    bool gpuEnabled_ = true;
     QUrl coverUrl_;
     QString fetchedCover_;
     quint64 coverRequest_ = 0;
