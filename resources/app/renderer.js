@@ -65,7 +65,7 @@ api.onExpanded(renderExpanded);api.onTab(showTab);api.onError(message);api.onNat
     system = snapshot;
   }
   renderSystem();
-});api.onState(s=>{state=s;renderTimer();renderReminders()});api.onAlarm(queueAlarm);api.onRecordToggle(()=>toggleRecord());api.onRecording(v=>{if(!v&&mediaRecorder?.state==='inactive')recordStart=0});
+});api.onState(s=>{state=s;renderTimer();renderReminders()});api.onAlarm(queueAlarm);api.onRecordToggle(handleRecordShortcut);api.onRecording(v=>{if(!v&&mediaRecorder?.state==='inactive')recordStart=0});
 function showTab(name){if(name==='settings'){run(api.openSettings());return}if(!titles[name])return;if(tab==='notes')saveNotes();tab=name;syncPanelWork();document.querySelectorAll('[data-page]').forEach(el=>el.hidden=el.dataset.page!==name);document.querySelectorAll('[data-tab]').forEach(b=>b.classList.toggle('active',b.dataset.tab===name));$('title').textContent=titles[name];$('title').hidden=Boolean(document.querySelector('#tabs .active'));$('content').scrollTop=0;message('');if(name==='clipboard')renderClips();if(name==='shelf')renderShelf();if(name==='notes')renderNotes();if(name==='tools')renderColors();if(name==='search'){$('command').focus();renderSearch()}if(name==='controls'){$('native-status').textContent=nativeError;refreshControls();refreshHapp()}if(name==='home')loadLyrics()}
 document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));document.querySelectorAll('[data-goto]').forEach(b=>b.onclick=()=>showTab(b.dataset.goto));const settingsButton = $('settings-button');
 function renderUpdateBadge(result) {
@@ -466,6 +466,16 @@ $('quick-text').onclick=()=>{showTab('tools');$('text-input').focus()};
 $('quick-record').onclick=()=>{showTab('tools');toggleRecord()};
 document.querySelectorAll('[data-capture]').forEach(b=>b.onclick=()=>run(api.capture(b.dataset.capture)));
 let recordStarting = false;
+function handleRecordShortcut() {
+  if (mediaRecorder?.state === 'recording' || !api.recordStream || navigator.userActivation?.isActive) {
+    toggleRecord();
+    return;
+  }
+  if (recordStarting || mediaRecorder) return;
+  showTab('tools');
+  $('record-button').focus();
+  $('record-status').textContent = 'Нажми Enter или «Запись экрана», чтобы выбрать источник.';
+}
 async function toggleRecord() {
   if (mediaRecorder?.state === 'recording') {
     mediaRecorder.stop();
@@ -477,9 +487,11 @@ async function toggleRecord() {
   let saveQueue = Promise.resolve();
   let recordError;
   try {
+    if (!navigator.mediaDevices?.getDisplayMedia) throw Error('Этот сеанс не поддерживает запись экрана.');
+    const wantsAudio = $('record-audio').checked;
     mediaStream = await navigator.mediaDevices.getDisplayMedia({
       video: { frameRate: 30 },
-      audio: $('record-audio').checked
+      audio: wantsAudio
     });
     recordChunks = [];
     const mime = ['video/mp4;codecs=avc1.42001E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm']
@@ -538,6 +550,7 @@ async function toggleRecord() {
     await api.recordState(true);
     $('record-label').textContent = 'Остановить запись';
     $('record-status').textContent = 'Идёт запись · ' + (recordMime.includes('mp4')?'MP4':'WebM') +
+      (wantsAudio && !mediaStream.getAudioTracks().length ? ' · без системного звука' : '') +
       ' · нажми ещё раз для сохранения';
     message('');
   } catch (error) {
