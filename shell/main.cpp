@@ -12,6 +12,7 @@
 #include <QMimeDatabase>
 #include <QPixmap>
 #include <QDateTime>
+#include <QCryptographicHash>
 #include <QDebug>
 #include <QDesktopServices>
 #include <QDir>
@@ -62,7 +63,11 @@
 #elif defined(Q_OS_LINUX)
 #include "x11_input.h"
 #include "portal_screenshot.h"
+#include "portal_shortcuts.h"
+#include <QDBusConnection>
+#include <QDBusMessage>
 #include <gtk/gtk.h>
+#include <gtk-layer-shell.h>
 #include <gio/gdesktopappinfo.h>
 #include <webkit2/webkit2.h>
 #endif
@@ -125,15 +130,40 @@ public:
             qputenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", arguments);
         }
 #endif
+#ifdef Q_OS_LINUX
+        if (!gtk_init_check(nullptr, nullptr)) return 2;
+        mainGtkWindow_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        if (auto *visual = gdk_screen_get_rgba_visual(gtk_widget_get_screen(mainGtkWindow_)))
+            gtk_widget_set_visual(mainGtkWindow_, visual);
+        gtk_widget_set_app_paintable(mainGtkWindow_, TRUE);
+        if (gtk_layer_is_supported()) {
+            auto *window = GTK_WINDOW(mainGtkWindow_);
+            gtk_layer_init_for_window(window);
+            gtk_layer_set_namespace(window, "orbit-native");
+            gtk_layer_set_layer(window, GTK_LAYER_SHELL_LAYER_TOP);
+            gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_TOP, TRUE);
+            gtk_layer_set_keyboard_mode(window, GTK_LAYER_SHELL_KEYBOARD_MODE_ON_DEMAND);
+        }
+        main_ = webview_create(false, mainGtkWindow_);
+#else
         main_ = webview_create(false, nullptr);
-        if (!main_) return 2;
-        if (!open(main_, "index.html", true)) { webview_destroy(main_); return 2; }
+#endif
+        if (!main_ || !open(main_, "index.html", true)) {
+            if (main_) webview_destroy(main_);
+#ifdef Q_OS_LINUX
+            gtk_widget_destroy(mainGtkWindow_);
+#endif
+            return 2;
+        }
         resize(false);
+        visible(main_, true);
         media_.changed = [this](const Track &track) { updateMedia(track); };
         if (!testing_ || qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) media_.refresh();
         if (!testing_) {
 #ifdef Q_OS_LINUX
-            x11Input_ = std::make_unique<X11Input>();
+            if (QGuiApplication::platformName().startsWith("wayland"))
+                portalShortcuts_ = std::make_unique<PortalShortcuts>(this);
+            else x11Input_ = std::make_unique<X11Input>();
 #endif
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
@@ -154,7 +184,13 @@ public:
         if (editor_) webview_destroy(editor_);
         if (preferences_) webview_destroy(preferences_);
         clearHotkeys();
+#ifdef Q_OS_LINUX
+        portalShortcuts_.reset();
+#endif
         webview_destroy(main_);
+#ifdef Q_OS_LINUX
+        gtk_widget_destroy(mainGtkWindow_);
+#endif
         return testing_ && !passed_ ? 1 : 0;
     }
 
@@ -394,6 +430,11 @@ private:
                   await orbit.notesSave(notes);
                   const added = await orbit.reminder('add', {text:'Orbit QA',at:Date.now()+60000,repeat:'once'});
                   const stored = await orbit.get();
+                  let alarmDelivered = false;
+                  orbit.onAlarm(alarm => { if (alarm.body === 'Orbit alarm fixture') alarmDelivered = true; });
+                  await orbit.reminder('add', {text:'Orbit alarm fixture',at:Date.now()+220,repeat:'once'});
+                  for (let i=0; i<25 && !alarmDelivered; i++) await new Promise(resolve=>setTimeout(resolve,50));
+                  if (alarmDelivered) document.querySelector('#alarm-dismiss')?.click();
                   const eq = await orbit.eqProfile([0,0,2,0,0,0,0,0,0]);
                   const eqSaved = (await orbit.eqProfile()).gains?.[2] === 2 && eq.gains?.[2] === 2;
                   showTab('weather');
@@ -451,12 +492,12 @@ private:
                   const dropTest = paths.length === 1 && shelf[0]?.path === paths[0] && launcher.count === 1 &&
                     (await orbit.fileIcon(paths[0]))?.startsWith?.('data:image/png;');
                   const desktopShape = typeof controls.networkUp === 'boolean' && typeof controls.dark === 'boolean';
-                  const valid = Boolean(eqSaved && soundShape && desktopShape && proxyTest && mediaTest && dropTest && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                  const valid = Boolean(alarmDelivered && eqSaved && soundShape && desktopShape && proxyTest && mediaTest && dropTest && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
                     added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
                     document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
                   if (!valid) window.orbitShellTest(false, {
-                    eqSaved, soundShape, desktopShape, proxyTest, mediaTest, dropTest,
+                    alarmDelivered, eqSaved, soundShape, desktopShape, proxyTest, mediaTest, dropTest,
                     media: system.media && {...system.media, cover: Boolean(system.media.cover)},
                     sources: system.sources
                   });
@@ -611,6 +652,25 @@ private:
 #endif
     }
 
+#ifdef Q_OS_LINUX
+    static QString portalTrigger(QKeyCombination combination)
+    {
+        QStringList parts;
+        const auto modifiers = combination.keyboardModifiers();
+        if (modifiers.testFlag(Qt::ControlModifier)) parts.append("CTRL");
+        if (modifiers.testFlag(Qt::AltModifier)) parts.append("ALT");
+        if (modifiers.testFlag(Qt::ShiftModifier)) parts.append("SHIFT");
+        if (modifiers.testFlag(Qt::MetaModifier)) parts.append("LOGO");
+        const int key = combination.key();
+        if (key >= Qt::Key_A && key <= Qt::Key_Z) parts.append(QChar('a' + key - Qt::Key_A));
+        else if (key >= Qt::Key_0 && key <= Qt::Key_9) parts.append(QChar(key));
+        else if (key >= Qt::Key_F1 && key <= Qt::Key_F24) parts.append(QString("F%1").arg(key - Qt::Key_F1 + 1));
+        else if (key == Qt::Key_Space) parts.append("space");
+        else return {};
+        return parts.join('+');
+    }
+#endif
+
     void registerHotkeys()
     {
         clearHotkeys();
@@ -618,14 +678,20 @@ private:
 #ifdef Q_OS_WIN
         const auto window = static_cast<HWND>(webview_get_window(main_));
         int next = 1;
+#elif defined(Q_OS_LINUX)
+        QList<PortalShortcut> portalActions;
 #endif
 #if defined(Q_OS_WIN) || defined(Q_OS_LINUX)
-        const auto add = [&](const QString &shortcut, std::function<void()> action) {
+        const auto add = [&](const QString &id, const QString &description, const QString &shortcut, std::function<void()> action) {
             if (shortcut.isEmpty()) return;
-            const auto sequence = QKeySequence::fromString(shortcut, QKeySequence::PortableText);
+            auto portable = shortcut;
+            portable.replace(QRegularExpression("(^|[+])Control[+]", QRegularExpression::CaseInsensitiveOption), "\\1Ctrl+");
+            const auto sequence = QKeySequence::fromString(portable, QKeySequence::PortableText);
             if (sequence.count() == 1) {
                 const auto combination = sequence[0];
 #ifdef Q_OS_WIN
+                Q_UNUSED(id);
+                Q_UNUSED(description);
                 const auto modifiers = combination.keyboardModifiers();
                 const UINT flags = MOD_NOREPEAT |
                     (modifiers.testFlag(Qt::ControlModifier) ? MOD_CONTROL : 0) |
@@ -642,6 +708,13 @@ private:
                     return;
                 }
 #elif defined(Q_OS_LINUX)
+                if (portalShortcuts_) {
+                    const auto trigger = portalTrigger(combination);
+                    if (!trigger.isEmpty()) {
+                        portalActions.append({id, description, shortcut, trigger, std::move(action)});
+                        return;
+                    }
+                }
                 if (x11Input_ && x11Input_->add(combination, std::move(action))) return;
 #endif
             }
@@ -667,23 +740,37 @@ private:
                 if (!message.isEmpty()) emitTo(main_, "error", message);
             });
         };
-        add(settings_.value("shortcut").toString(), [tab] { tab("search"); });
-        add("Ctrl+Alt+I", [this, focus] {
+        add("search", QStringLiteral("Открыть поиск Orbit"), settings_.value("shortcut").toString(), [tab] { tab("search"); });
+        add("island", QStringLiteral("Открыть или свернуть Orbit"), "Ctrl+Alt+I", [this, focus] {
             resize(!expanded_);
             if (expanded_) focus();
         });
-        add("Ctrl+Alt+V", [tab] { tab("clipboard"); });
-        add("Ctrl+Alt+S", [grab] { grab("edit"); });
-        add("Ctrl+Alt+O", [grab] { grab("ocr"); });
-        add("Ctrl+Alt+C", [grab] { grab("color"); });
-        add("Ctrl+Alt+Q", [grab] { grab("qr"); });
-        add("Ctrl+Alt+R", [this, tab] { tab("tools"); emitTo(main_, "record-toggle", true); });
+        add("clipboard", QStringLiteral("Открыть буфер обмена"), "Ctrl+Alt+V", [tab] { tab("clipboard"); });
+        add("screenshot", QStringLiteral("Снимок экрана"), "Ctrl+Alt+S", [grab] { grab("edit"); });
+        add("ocr", QStringLiteral("Распознать текст с экрана"), "Ctrl+Alt+O", [grab] { grab("ocr"); });
+        add("color", QStringLiteral("Взять цвет с экрана"), "Ctrl+Alt+C", [grab] { grab("color"); });
+        add("qr", QStringLiteral("Считать QR-код"), "Ctrl+Alt+Q", [grab] { grab("qr"); });
+        add("record", QStringLiteral("Запись экрана"), "Ctrl+Alt+R", [this, tab] { tab("tools"); emitTo(main_, "record-toggle", true); });
         for (const auto &entry : settings_.value("items").toArray()) {
             const auto item = entry.toObject();
-            add(item.value("hotkey").toString(), [this, target = item.value("target").toString()] {
+            const auto target = item.value("target").toString();
+            const auto digest = QCryptographicHash::hash(target.toUtf8(), QCryptographicHash::Sha256).toHex().left(20);
+            add("app-" + QString::fromLatin1(digest), item.value("name").toString(),
+                item.value("hotkey").toString(), [this, target] {
                 const auto message = launch(target).toObject().value("error").toString();
                 if (!message.isEmpty()) emitTo(main_, "error", message);
             });
+        }
+#endif
+#ifdef Q_OS_LINUX
+        if (portalShortcuts_) {
+            const auto invalid = unavailableHotkeys_;
+            portalShortcuts_->configure(std::move(portalActions), [this, invalid](QStringList missing) {
+                unavailableHotkeys_ = invalid;
+                for (const auto &shortcut : std::as_const(missing)) unavailableHotkeys_.append(shortcut);
+                emitTo(main_, "hotkeys", unavailableHotkeys_);
+            });
+            return;
         }
 #endif
         emitTo(main_, "hotkeys", unavailableHotkeys_);
@@ -726,9 +813,19 @@ private:
         auto *window = GTK_WINDOW(webview_get_window(main_));
         gtk_window_set_decorated(window, FALSE);
         gtk_window_set_keep_above(window, TRUE);
+        g_signal_connect(window, "delete-event", G_CALLBACK(+[](GtkWidget *, GdkEvent *, gpointer context) {
+            auto *self = static_cast<OrbitShellController *>(context);
+            webview_terminate(self->main_);
+            return TRUE;
+        }), this);
+        auto *style = gtk_widget_get_style_context(GTK_WIDGET(window));
+        auto *css = gtk_css_provider_new();
+        gtk_css_provider_load_from_data(css, "window { background-color: transparent; }", -1, nullptr);
+        gtk_style_context_add_provider(style, GTK_STYLE_PROVIDER(css), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+        g_object_unref(css);
         gtk_window_set_skip_taskbar_hint(window, TRUE);
         auto *browser = WEBKIT_WEB_VIEW(webview_get_native_handle(main_, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
-        GdkRGBA background{0, 0, 0, 1};
+        GdkRGBA background{0, 0, 0, 0};
         if (browser) webkit_web_view_set_background_color(browser, &background);
 #endif
     }
@@ -754,6 +851,33 @@ private:
             if (squareTop) { CombineRgn(region, region, squareTop, RGN_OR); DeleteObject(squareTop); }
         }
         if (!SetWindowRgn(hwnd, region, TRUE)) DeleteObject(region);
+#elif defined(Q_OS_LINUX)
+        if (QGuiApplication::platformName() != "xcb") return;
+        auto *surface = gtk_widget_get_window(mainGtkWindow_);
+        if (!surface) return;
+        const int left = qRound(metrics.value("x").toDouble() * lastScale_);
+        const int top = qRound(metrics.value("y").toDouble() * lastScale_);
+        const int width = qRound(metrics.value("width").toDouble() * lastScale_);
+        const int height = qRound(metrics.value("height").toDouble() * lastScale_);
+        if (width < 16 || height < 16 || width > 3500 || height > 2100) return;
+        const int limit = (std::min)(width, height) / 2;
+        const int upper = std::clamp(qRound(metrics.value("top").toDouble() * lastScale_), 0, limit);
+        const int lower = std::clamp(qRound(metrics.value("bottom").toDouble() * lastScale_), 0, limit);
+        auto *region = cairo_region_create();
+        for (int y = 0; y < height; ++y) {
+            int inset = 0;
+            if (y < upper) {
+                const double dy = upper - y - .5;
+                inset = qRound(upper - std::sqrt(upper * upper - dy * dy));
+            } else if (y >= height - lower) {
+                const double dy = y - (height - lower) + .5;
+                inset = qRound(lower - std::sqrt(lower * lower - dy * dy));
+            }
+            const cairo_rectangle_int_t row{left + inset, top + y, width - 2 * inset, 1};
+            cairo_region_union_rectangle(region, &row);
+        }
+        gdk_window_shape_combine_region(surface, region, 0, 0);
+        cairo_region_destroy(region);
 #else
         Q_UNUSED(metrics);
 #endif
@@ -836,6 +960,11 @@ private:
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
         if (lastWindowSize_ != size) SetWindowRgn(hwnd, nullptr, TRUE);
+#elif defined(Q_OS_LINUX)
+        if (lastWindowSize_ != size && QGuiApplication::platformName() == "xcb") {
+            if (auto *surface = gtk_widget_get_window(mainGtkWindow_))
+                gdk_window_shape_combine_region(surface, nullptr, 0, 0);
+        }
 #endif
         if (lastWindowSize_ != size) {
             lastWindowSize_ = size;
@@ -870,7 +999,16 @@ private:
         if (position == "left") x = area.left() + 16;
         if (position == "right") x = area.right() + 1 - size.width() - 16;
         auto *window = GTK_WINDOW(webview_get_window(main_));
-        gtk_window_move(window, x, top);
+        if (gtk_layer_is_layer_window(window)) {
+            auto *display = gtk_widget_get_display(mainGtkWindow_);
+            auto *monitor = gdk_display_get_monitor_at_point(display, area.center().x(), area.center().y());
+            if (monitor && gtk_layer_get_monitor(window) != monitor) gtk_layer_set_monitor(window, monitor);
+            gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_LEFT, position == "left");
+            gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_RIGHT, position == "right");
+            gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_LEFT, position == "left" ? 16 : 0);
+            gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_RIGHT, position == "right" ? 16 : 0);
+            gtk_layer_set_margin(window, GTK_LAYER_SHELL_EDGE_TOP, edge ? 0 : top - area.top());
+        } else gtk_window_move(window, x, top);
         gtk_widget_set_opacity(GTK_WIDGET(window), opacity);
         if (auto *surface = gtk_widget_get_window(GTK_WIDGET(window))) {
             auto *region = clickThrough ? cairo_region_create() : nullptr;
@@ -991,6 +1129,28 @@ private:
         if (next > 0) alarm_.start(int(std::clamp(next - now, qint64{0}, qint64{30000})));
     }
 
+    void notifyDesktop(const QString &title, const QString &body)
+    {
+        if (testing_) return;
+#ifdef Q_OS_LINUX
+        auto notification = QDBusMessage::createMethodCall("org.freedesktop.Notifications",
+            "/org/freedesktop/Notifications", "org.freedesktop.Notifications", "Notify");
+        notification << QString("Orbit Native") << uint(0) << QString("orbit-native-shell") << title << body
+                     << QStringList() << QVariantMap() << int(6000);
+        QDBusConnection::sessionBus().asyncCall(notification, 2000);
+#else
+        if (tray_ && QSystemTrayIcon::supportsMessages()) tray_->showMessage(title, body, QSystemTrayIcon::Information, 6000);
+#endif
+    }
+
+    void showAlarms()
+    {
+        if (!mainReady_ || pendingAlarms_.isEmpty()) return;
+        resize(true);
+        for (const auto &item : std::as_const(pendingAlarms_)) emitTo(main_, "alarm", item);
+        pendingAlarms_ = QJsonArray();
+    }
+
     void timerDue()
     {
         const auto now = QDateTime::currentDateTime();
@@ -1020,8 +1180,12 @@ private:
             state_["reminders"] = reminders;
             persist();
             emitTo(main_, "state", state_);
-            resize(true);
-            for (const auto &item : events) emitTo(main_, "alarm", item);
+            for (const auto &item : events) {
+                const auto alarm = item.toObject();
+                notifyDesktop(alarm.value("title").toString(), alarm.value("body").toString());
+                pendingAlarms_.append(item);
+            }
+            showAlarms();
         }
         scheduleTimer();
     }
@@ -1811,7 +1975,11 @@ private:
                 preferencesReady_ = true;
                 showSettingsSection();
             }
-            if (window == main_ && !lastSystem_.isEmpty()) emitTo(main_, "system", lastSystem_);
+            if (window == main_) {
+                mainReady_ = true;
+                if (!lastSystem_.isEmpty()) emitTo(main_, "system", lastSystem_);
+                showAlarms();
+            }
         } else if (command == "expand" && window == main_) {
             resize(first.toBool()); respond(true);
         } else if (command == "compact-mini" && window == main_) {
@@ -2029,6 +2197,8 @@ private:
     QString notifiedUpdate_;
     QJsonObject settings_, state_, update_;
     QJsonObject lastSystem_;
+    bool mainReady_ = false;
+    QJsonArray pendingAlarms_;
 #ifdef Q_OS_LINUX
     QJsonArray recentDrop_;
     qint64 recentDropTime_ = 0;
@@ -2042,7 +2212,9 @@ private:
     QString foregroundName_;
     bool hiddenFullscreen_ = false;
 #elif defined(Q_OS_LINUX)
+    GtkWidget *mainGtkWindow_ = nullptr;
     std::unique_ptr<X11Input> x11Input_;
+    std::unique_ptr<PortalShortcuts> portalShortcuts_;
 #endif
     QTimer collapse_;
     QTimer keyboardPoll_;

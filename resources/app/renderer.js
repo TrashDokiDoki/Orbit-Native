@@ -57,7 +57,7 @@ function renderIndicator(label, description) {
 api.onSettings(next=>{settings=next;applyAppearance();renderApps()});
 api.onLayout(label => renderIndicator('⌨ ' + label, 'Раскладка: ' + label));
 api.onCaps(on => renderIndicator(on ? '⇪ Caps Lock вкл.' : '↓ Caps Lock выкл.', on ? 'Caps Lock включён' : 'Caps Lock выключен'));
-api.onExpanded(renderExpanded);api.onTab(showTab);api.onError(message);api.onNativeError(e=>{nativeError=e;$('native-status').textContent=e});api.onHotkeys(keys=>{if(keys.length)message('Сочетание занято: '+keys.join(', '))});api.onClips(clips=>{state.clips=clips;if(tab==='clipboard')renderClips()});api.onSystem(snapshot => {
+api.onExpanded(renderExpanded);api.onTab(showTab);api.onError(message);api.onNativeError(e=>{nativeError=e;$('native-status').textContent=e});api.onHotkeys(keys=>{if(keys.length)message('Недоступны сочетания: '+keys.join(', '))});api.onClips(clips=>{state.clips=clips;if(tab==='clipboard')renderClips()});api.onSystem(snapshot => {
   const media = snapshot.media;
   if (media && !Object.hasOwn(media, 'cover') && media.coverRevision === system.media?.coverRevision) {
     system = { ...snapshot, media: { ...media, cover: system.media.cover } };

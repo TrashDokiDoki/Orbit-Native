@@ -175,7 +175,7 @@ $('config').onsubmit = event => {
   document.querySelectorAll('[data-choice]').forEach(input=>{const key=input.dataset.choice;next[key]=[...document.querySelectorAll('[data-choice='+key+']:not(:checked)')].map(choice=>choice.value)});
   run(api.save(next), result => {
     settings = result.settings;
-    $('message').textContent = result.hotkeys.length ? 'Сохранено. Заняты клавиши: ' + result.hotkeys.join(', ') : 'Настройки сохранены';
+    $('message').textContent = result.hotkeys.length ? 'Сохранено. Недоступны сочетания: ' + result.hotkeys.join(', ') : 'Настройки сохранены';
   });
 };
 $('backup').onclick = () => run(api.dataExport(), saved => {
