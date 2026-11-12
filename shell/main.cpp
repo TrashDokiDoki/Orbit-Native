@@ -65,6 +65,7 @@
 #include "x11_input.h"
 #include "portal_screenshot.h"
 #include "portal_shortcuts.h"
+#include "dictation.h"
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCall>
@@ -123,6 +124,13 @@ public:
 
     int run()
     {
+#ifdef Q_OS_LINUX
+        if (testing_ && qEnvironmentVariableIsSet("ORBIT_TEST_DICTATION_PCM") &&
+            !Dictation::test(qEnvironmentVariable("ORBIT_TEST_DICTATION_PCM"))) {
+            qWarning("Orbit smoke: offline dictation did not recognize the test audio");
+            return 3;
+        }
+#endif
         gpuEnabled_ = settings_.value("gpuAcceleration").toBool(true);
 #ifdef Q_OS_WIN
         if (!gpuEnabled_) {
@@ -2211,7 +2219,12 @@ private:
             respond(openSystemSettings(first.toString()));
         } else if (command == "native" && first.toString() == "dictation" && window == main_) {
             resize(false);
+#ifdef Q_OS_LINUX
+            respond(dictation_.open() ? QJsonValue(true) :
+                QJsonValue(error(QStringLiteral("Установите сборку Orbit Native с офлайн-диктовкой."))));
+#else
             respond(startDictation());
+#endif
         } else if (command == "audio" && window == main_) {
             audio_.request(first.toString(), params.at(1), respond);
         } else if (command == "eq-profile" && window == main_) {
@@ -2281,6 +2294,7 @@ private:
     unsigned long lastForegroundPid_ = 0;
     std::unique_ptr<X11Input> x11Input_;
     std::unique_ptr<PortalShortcuts> portalShortcuts_;
+    Dictation dictation_;
 #endif
     QTimer collapse_;
     QTimer keyboardPoll_;
