@@ -51,24 +51,35 @@ Function .onInit
     SetRegView 64
 FunctionEnd
 
-Function EnsureWebView
-    SetRegView 32
+Function ReadWebViewVersion
     ReadRegStr $0 HKLM "SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
     ${If} $0 == ""
     ${OrIf} $0 == "0.0.0.0"
         ReadRegStr $0 HKCU "Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" "pv"
-        ${If} $0 == ""
+    ${EndIf}
+FunctionEnd
+
+Function EnsureWebView
+    SetRegView 32
+    Call ReadWebViewVersion
+    ${If} $0 == ""
+    ${OrIf} $0 == "0.0.0.0"
+        InitPluginsDir
+        SetOutPath "$PLUGINSDIR"
+        File /oname=OrbitWebView2Setup.exe "${ORBIT_BOOTSTRAPPER}"
+        ClearErrors
+        ExecWait '"$PLUGINSDIR\OrbitWebView2Setup.exe" /silent /install' $1
+        ${If} ${Errors}
+            StrCpy $1 1
+        ${EndIf}
+        Delete "$PLUGINSDIR\OrbitWebView2Setup.exe"
+        Call ReadWebViewVersion
+        ${If} $1 != 0
+        ${OrIf} $0 == ""
         ${OrIf} $0 == "0.0.0.0"
-            InitPluginsDir
-            SetOutPath "$PLUGINSDIR"
-            File /oname=OrbitWebView2Setup.exe "${ORBIT_BOOTSTRAPPER}"
-            ExecWait '"$PLUGINSDIR\OrbitWebView2Setup.exe" /silent /install' $0
-            Delete "$PLUGINSDIR\OrbitWebView2Setup.exe"
-            ${If} $0 != 0
-                MessageBox MB_ICONSTOP|MB_OK "$(WebViewFailed)" /SD IDOK
-                SetErrorLevel 3
-                Abort
-            ${EndIf}
+            MessageBox MB_ICONSTOP|MB_OK "$(WebViewFailed)" /SD IDOK
+            SetErrorLevel 3
+            Abort
         ${EndIf}
     ${EndIf}
     SetRegView 64
