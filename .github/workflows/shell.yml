@@ -98,7 +98,18 @@ jobs:
         with:
           version: '6.8.3'
           arch: ${{ matrix.qtArch }}
-      - run: choco install nsis --yes --no-progress
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis --yes --no-progress
+            if ($LASTEXITCODE -eq 0) {
+              $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+              if (Test-Path -LiteralPath $compiler) { exit 0 }
+            }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+          }
+          throw 'Could not install the NSIS compiler'
       - uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/orbit-vcpkg-cache
@@ -197,7 +208,18 @@ jobs:
         with:
           name: OrbitShell-windows-payload-arm64
           path: payload/arm64
-      - run: choco install nsis --yes --no-progress
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            choco install nsis --yes --no-progress
+            if ($LASTEXITCODE -eq 0) {
+              $compiler = Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe'
+              if (Test-Path -LiteralPath $compiler) { exit 0 }
+            }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+          }
+          throw 'Could not install the NSIS compiler'
       - name: Build one per-user Windows installer
         shell: pwsh
         run: |
