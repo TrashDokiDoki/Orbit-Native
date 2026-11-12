@@ -20,6 +20,23 @@
   api.controlsView = visible => void call('controls-view', visible);
   api.dragFile = id => void call('drag-file', id);
   api.filePath = () => '';
+  document.addEventListener('DOMContentLoaded', () => {
+    const island = document.getElementById('island');
+    if (!island) return;
+    let pending;
+    const updateShape = () => {
+      clearTimeout(pending);
+      pending = setTimeout(() => {
+        const rect = island.getBoundingClientRect();
+        const style = getComputedStyle(island);
+        void call('island-shape', {x:rect.x,y:rect.y,width:rect.width,height:rect.height,
+          top:parseFloat(style.borderTopLeftRadius),bottom:parseFloat(style.borderBottomLeftRadius)});
+      }, 85);
+    };
+    new ResizeObserver(updateShape).observe(island);
+    window.addEventListener('resize', updateShape);
+    updateShape();
+  });
   Object.defineProperty(window, 'orbit', { value: Object.freeze(api) });
   Object.defineProperty(window, 'orbitNativeDispatch', {
     value: (channel, value) => {

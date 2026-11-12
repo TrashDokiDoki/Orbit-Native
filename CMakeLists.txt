@@ -75,7 +75,7 @@ if(ORBIT_WEB_SHELL)
     target_link_libraries(OrbitShell PRIVATE Qt6::Widgets Qt6::Network webview::core)
     target_compile_definitions(OrbitShell PRIVATE QT_NO_KEYWORDS ORBIT_VERSION="${PROJECT_VERSION}")
     if(WIN32)
-        target_link_libraries(OrbitShell PRIVATE user32 comctl32)
+        target_link_libraries(OrbitShell PRIVATE user32 comctl32 gdi32)
         if(MSVC)
             target_compile_options(OrbitShell PRIVATE /utf-8)
         endif()
@@ -91,6 +91,7 @@ if(ORBIT_WEB_SHELL)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/core.js"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/renderer.js"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/pug.png"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/icon.png"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.html"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.css"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.js"

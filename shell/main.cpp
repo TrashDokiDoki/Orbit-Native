@@ -176,6 +176,13 @@ private:
     {
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
+        auto *controller = static_cast<ICoreWebView2Controller *>(
+            webview_get_native_handle(main_, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
+        ICoreWebView2Controller2 *transparent = nullptr;
+        if (controller && SUCCEEDED(controller->QueryInterface(IID_PPV_ARGS(&transparent)))) {
+            transparent->put_DefaultBackgroundColor(COREWEBVIEW2_COLOR{0, 0, 0, 0});
+            transparent->Release();
+        }
         const auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
         SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~(WS_CAPTION | WS_THICKFRAME)) | WS_POPUP);
         const auto extra = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -192,8 +199,37 @@ private:
 #endif
     }
 
+    void shape(const QJsonObject &metrics)
+    {
+#ifdef Q_OS_WIN
+        auto hwnd = static_cast<HWND>(webview_get_window(main_));
+        RECT client{};
+        if (!GetClientRect(hwnd, &client)) return;
+        const auto scale = GetDpiForWindow(hwnd) / 96.0;
+        const auto left = std::clamp(qRound(metrics.value("x").toDouble() * scale), 0, int(client.right));
+        const auto top = std::clamp(qRound(metrics.value("y").toDouble() * scale), 0, int(client.bottom));
+        const auto width = std::clamp(qRound(metrics.value("width").toDouble() * scale), 0, int(client.right) - left);
+        const auto height = std::clamp(qRound(metrics.value("height").toDouble() * scale), 0, int(client.bottom) - top);
+        if (width < 16 || height < 16) return;
+        const auto diameter = std::clamp(qRound(metrics.value("bottom").toDouble() * scale * 2), 0, (std::min)(width, height));
+        auto region = diameter > 0 ? CreateRoundRectRgn(left, top, left + width, top + height, diameter, diameter)
+                                   : CreateRectRgn(left, top, left + width, top + height);
+        if (!region) return;
+        if (diameter > 0 && metrics.value("top").toDouble() == 0) {
+            auto squareTop = CreateRectRgn(left, top, left + width, top + diameter / 2);
+            if (squareTop) { CombineRgn(region, region, squareTop, RGN_OR); DeleteObject(squareTop); }
+        }
+        if (!SetWindowRgn(hwnd, region, TRUE)) DeleteObject(region);
+#else
+        Q_UNUSED(metrics);
+#endif
+    }
+
     void resize(bool expanded)
     {
+#ifdef Q_OS_WIN
+        SetWindowRgn(static_cast<HWND>(webview_get_window(main_)), nullptr, TRUE);
+#endif
         webview_set_size(main_, expanded ? 856 : 184, expanded ? 514 : 38, WEBVIEW_HINT_FIXED);
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
@@ -511,12 +547,22 @@ private:
         const auto first = params.at(0);
         if (command == "get") {
             const auto system = QSysInfo::productType() == "windows" ? QString("Windows") : QString("Linux");
+            QJsonArray displays;
+            const auto screens = QGuiApplication::screens();
+            for (qsizetype i = 0; i < screens.size(); ++i) {
+                const auto name = screens.at(i)->name();
+                displays.append(QJsonObject{{"index", int(i)}, {"label", name.isEmpty() ? QStringLiteral("Монитор %1").arg(i+1) : name}});
+            }
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
-                    {"systemLabel", system}, {"displays", QJsonArray{}}, {"hotkeys", QJsonArray{}}, {"gpuAccelerationActive", false}});
+                    {"systemLabel", system}, {"displays", displays}, {"hotkeys", QJsonArray{}}});
+            if (window == preferences_) emitTo(preferences_, "settings-section", QJsonObject{{"section", settingsSection_}});
             if (window == main_ && !lastMedia_.isNull()) emitTo(main_, "system", QJsonObject{{"media", lastMedia_}});
         } else if (command == "expand" && window == main_) {
             resize(first.toBool()); respond(true);
+        } else if (command == "island-shape" && window == main_) {
+            shape(first.toObject()); respond(true);
         } else if (command == "open-settings" && window == main_) {
+            settingsSection_ = first.toString(QStringLiteral("general"));
             if (!preferences_) {
                 preferences_ = webview_create(false, nullptr);
                 if (preferences_ && !open(preferences_, "settings.html", false)) { webview_destroy(preferences_); preferences_ = nullptr; }
@@ -526,6 +572,7 @@ private:
 #elif defined(Q_OS_LINUX)
                 gtk_window_present(GTK_WINDOW(webview_get_window(preferences_)));
 #endif
+                emitTo(preferences_, "settings-section", QJsonObject{{"section", settingsSection_}});
             }
             respond(preferences_ ? QJsonValue(true) : QJsonValue(error(QStringLiteral("Не удалось открыть настройки"))));
         } else if (command == "save" && window == preferences_) {
@@ -591,6 +638,7 @@ private:
     }
 
     QString directory_, store_;
+    QString settingsSection_ = QStringLiteral("general");
     bool testing_ = false, passed_ = false;
     Media media_;
     QNetworkAccessManager network_;
