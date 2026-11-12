@@ -187,9 +187,22 @@ public:
             QTimer::singleShot(10000, this, &OrbitShellController::notifyUpdate);
             connect(QApplication::clipboard(), &QClipboard::dataChanged, this, &OrbitShellController::captureClipboard);
         }
-        if (testing_) QTimer::singleShot(20000, this, [this] { webview_terminate(main_); });
+        if (testing_) QTimer::singleShot(20000, this, &OrbitShellController::quit);
         scheduleTimer();
         webview_run(main_);
+        shuttingDown_ = true;
+        keyboardPoll_.stop();
+        collapse_.stop();
+        alarm_.stop();
+        updateTimer_.stop();
+        media_.changed = {};
+#ifdef Q_OS_WIN
+#if defined(__ICoreWebView2_19_INTERFACE_DEFINED__)
+        memoryIdle_.stop();
+#endif
+        drainWebViewReplies();
+#endif
+        if (testing_) std::fprintf(stderr, "Orbit smoke: event loop stopped\n");
         if (tray_) tray_->setContextMenu(nullptr);
         if (editor_) webview_destroy(editor_);
         if (preferences_) webview_destroy(preferences_);
@@ -201,10 +214,41 @@ public:
 #ifdef Q_OS_LINUX
         gtk_widget_destroy(mainGtkWindow_);
 #endif
+        if (testing_) std::fprintf(stderr, "Orbit smoke: views released\n");
         return testing_ && !passed_ ? 1 : 0;
     }
 
 private:
+    void quit()
+    {
+        if (shuttingDown_) return;
+        shuttingDown_ = true;
+        webview_terminate(main_);
+    }
+
+#ifdef Q_OS_WIN
+    void drainWebViewReplies()
+    {
+        // WebView 0.12 destroys its controller before draining its message queue.
+        // Complete dispatched replies while the corresponding controllers are still alive.
+        for (const auto window : {main_, editor_, preferences_}) {
+            if (window && webview_dispatch(window, [](webview_t, void *context) {
+                    --*static_cast<int *>(context);
+                }, &shutdownReplies_) == WEBVIEW_ERROR_OK) ++shutdownReplies_;
+        }
+        const auto deadline = GetTickCount64() + 500;
+        while (shutdownReplies_ > 0 && GetTickCount64() < deadline) {
+            MSG message;
+            if (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+                if (message.message != WM_QUIT) {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            } else MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+    }
+#endif
+
     static QString coverData(QIODevice *input)
     {
         QImageReader decoder(input);
@@ -463,7 +507,7 @@ private:
                 const auto result = QJsonDocument::fromJson(args).array();
                 self->passed_ = result.at(0).toBool();
                 if (!self->passed_ && result.size() > 1) qWarning().noquote() << json(result.at(1));
-                webview_terminate(self->main_);
+                self->quit();
             }, this);
         }
         if (testing_ && island) {
@@ -843,6 +887,7 @@ private:
                                            UINT_PTR, DWORD_PTR context)
     {
         auto *self = reinterpret_cast<OrbitShellController *>(context);
+        if (message == WM_CLOSE) { self->quit(); return 0; }
         if (message == WM_HOTKEY) {
             const auto action = self->hotkeys_.find(int(wParam));
             if (action != self->hotkeys_.end()) {
@@ -877,7 +922,7 @@ private:
         gtk_window_set_keep_above(window, TRUE);
         g_signal_connect(window, "delete-event", G_CALLBACK(+[](GtkWidget *, GdkEvent *, gpointer context) {
             auto *self = static_cast<OrbitShellController *>(context);
-            webview_terminate(self->main_);
+            self->quit();
             return TRUE;
         }), this);
         auto *style = gtk_widget_get_style_context(GTK_WIDGET(window));
@@ -1085,7 +1130,7 @@ private:
 
     void emitTo(webview_t window, const QString &event, const QJsonValue &value)
     {
-        if (!window) return;
+        if (!window || shuttingDown_) return;
         const auto script = "window.orbitNativeDispatch?.(" + json(event) + "," + json(value) + ");";
         webview_eval(window, script.constData());
     }
@@ -1829,7 +1874,7 @@ private:
         tray_ = new QSystemTrayIcon(QIcon(QDir(directory_).filePath("icon.png")), this);
         trayMenu_ = std::make_unique<QMenu>();
         trayMenu_->addAction(QStringLiteral("Открыть Orbit"), this, [this] { visible(main_, true); resize(true); });
-        trayMenu_->addAction(QStringLiteral("Выход"), this, [this] { webview_terminate(main_); });
+        trayMenu_->addAction(QStringLiteral("Выход"), this, &OrbitShellController::quit);
         tray_->setContextMenu(trayMenu_.get());
         tray_->setToolTip(QStringLiteral("Orbit Native"));
         tray_->show();
@@ -2026,8 +2071,12 @@ private:
 
     void receive(const Channel &channel, const QByteArray &id, const QByteArray &requestBody)
     {
+        if (shuttingDown_) return;
         const auto window = channel.window;
-        const auto respond = [window, id](const QJsonValue &value) { webview_return(window, id.constData(), 0, json(value).constData()); };
+        const auto respond = [this, window, id](const QJsonValue &value) {
+            if (!shuttingDown_ && (window == main_ || window == preferences_ || window == editor_))
+                webview_return(window, id.constData(), 0, json(value).constData());
+        };
         if (requestBody.size() > (window == editor_ ? 48 : 8) * 1024 * 1024) { respond(error("Request too large")); return; }
         const auto args = QJsonDocument::fromJson(requestBody).array();
         if (args.size() != 3 || args.at(0).toString() != channel.token) { respond(error("Untrusted window")); return; }
@@ -2127,6 +2176,7 @@ private:
         } else if (command == "capture" && window == main_) {
             capture(first.toString(), respond);
         } else if (command == "capture-ready" && window == editor_) {
+            if (testing_) std::fprintf(stderr, "Orbit smoke: editor requested screenshot\n");
             respond(snapshot_);
         } else if (command == "capture-result" && window == editor_) {
             captureResult(first.toObject(), respond);
@@ -2194,7 +2244,13 @@ private:
             }
             networkToolStatus(this, settings_.value("proxyPath").toString(), respond);
         } else if (command == "network-tools-link" && window == main_) {
-            if (first.toString() == "zapret") respond(launch(QStringLiteral("https://github.com/Flowseal/zapret-discord-youtube")));
+            if (first.toString() == "zapret") {
+#ifdef Q_OS_LINUX
+                respond(launch(QStringLiteral("https://github.com/bol-van/zapret")));
+#else
+                respond(launch(QStringLiteral("https://github.com/Flowseal/zapret-discord-youtube")));
+#endif
+            }
             else if (first.toString() == "tg") respond(launch(QStringLiteral("https://github.com/Flowseal/tg-ws-proxy/releases/latest")));
             else respond(error(QStringLiteral("Неизвестный инструмент")));
         } else if (command == "happ" && window == main_) {
@@ -2256,7 +2312,7 @@ private:
             respond(true);
         } else if (command == "quit") {
             respond(true);
-            webview_terminate(main_);
+            quit();
         } else {
             respond(error(QStringLiteral("Эта функция ещё переносится в Orbit Native.")));
         }
@@ -2277,6 +2333,7 @@ private:
     QJsonObject settings_, state_, update_;
     QJsonObject lastSystem_;
     bool mainReady_ = false;
+    bool shuttingDown_ = false;
     QJsonArray pendingAlarms_;
 #ifdef Q_OS_LINUX
     QJsonArray recentDrop_;
@@ -2288,6 +2345,7 @@ private:
     std::map<int, std::function<void()>> hotkeys_;
     HWND lastExternalWindow_ = nullptr;
     HWND lastRuleWindow_ = nullptr;
+    int shutdownReplies_ = 0;
 #elif defined(Q_OS_LINUX)
     GtkWidget *mainGtkWindow_ = nullptr;
     unsigned long lastExternalX11_ = 0;

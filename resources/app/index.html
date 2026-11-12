@@ -24,7 +24,7 @@
 </section>
 <div class="audio-strip" data-module="audio" aria-label="Звук">
   <button id="audio-mute" title="Выключить звук" aria-label="Выключить звук" aria-pressed="false" disabled><span class="speaker-icon" aria-hidden="true"></span></button>
-  <input id="audio-level" type="range" min="0" max="100" value="0" aria-label="Громкость Windows" disabled>
+  <input id="audio-level" type="range" min="0" max="100" value="0" aria-label="Системная громкость" disabled>
   <output id="audio-value" for="audio-level">—</output>
   <button id="eq-open" title="Эквалайзер" aria-label="Эквалайзер" hidden><span class="eq-icon" aria-hidden="true">☷</span></button>
   <select id="audio-device" aria-label="Устройство вывода звука" disabled><option>Загрузка…</option></select>
@@ -44,20 +44,20 @@
 <section data-page="clipboard" hidden><div class="inline"><input id="clip-search" placeholder="Поиск в истории…"><button id="clip-clear">Очистить</button></div><div id="clip-notice" class="empty">История выключена. Включи её в настройках, чтобы сохранять текст и изображения локально.</div><div id="clips" class="stack"></div></section>
 <section data-page="shelf" hidden><div id="drop-zone" class="drop-zone"><b>Место для твоих файлов</b><p>Перетащи сюда файлы. Они останутся на своём месте.</p><button id="shelf-add" class="primary">Выбрать файлы</button></div><div id="shelf" class="stack"></div><p class="hint">Тяни файл за значок ↗ в другое приложение. Удаление с полки не удаляет сам файл.</p></section>
 <section data-page="notes" hidden><div class="inline"><select id="note-select" aria-label="Заметка"></select><button id="note-add">＋</button><button id="note-delete">Удалить</button></div><div class="inline"><input id="note-name" placeholder="Название"><input id="note-folder" placeholder="Папка"></div><textarea id="note-text" class="note-editor" placeholder="Идеи, планы, списки… Поддерживаются обычный текст и Markdown."></textarea><small class="muted" id="note-status">Сохраняется автоматически · обычный текст / Markdown</small><div class="section-label">НАПОМИНАНИЯ</div><div class="inline"><input id="reminder-text" placeholder="О чём напомнить?"></div><div class="inline"><input id="reminder-at" type="datetime-local"><select id="reminder-repeat"><option value="once">Один раз</option><option value="daily">Каждый день</option></select><button id="reminder-add">＋</button></div><div id="reminders" class="stack"></div><p class="hint">Таймер и напоминания работают, пока запущен Orbit. Пропущенное напоминание появится при следующем запуске.</p></section>
-<section data-page="tools" hidden><div class="tool-grid"><button data-capture="edit">▣<b>Скриншот</b><small>Область, разметка, PNG</small></button><button data-capture="ocr">T<b>Текст с экрана</b><small>Распознавание Windows</small></button><button data-capture="qr">▦<b>QR-код</b><small>Прочитать с экрана</small></button><button data-capture="color">◉<b>Пипетка</b><small>Цвет в HEX</small></button><button id="record-button">●<b id="record-label">Запись экрана</b><small>Выбранный монитор</small></button><button id="dictation">♩<b>Голос в текст</b><small>Ввод Windows · Win+H</small></button></div><label class="check"><input id="record-audio" type="checkbox" checked> Записывать системный звук</label><p class="hint" id="record-status">Сохранение в MP4, если кодек доступен; иначе WebM.</p><div class="section-label">ТЕКСТОВЫЕ ИНСТРУМЕНТЫ</div><textarea id="text-input" placeholder="Вставь текст…"></textarea><div class="text-actions"><button data-text="upper">АБВ</button><button data-text="lower">абв</button><button data-text="layout">Раскладка</button><button data-text="translit">Транслит</button><button data-text="json">JSON</button><button data-text="encode64">→ Base64</button><button data-text="decode64">← Base64</button><button data-text="url">→ URL</button><button data-text="unurl">← URL</button><button id="text-copy">Копировать</button></div><div class="section-label">НЕДАВНИЕ ЦВЕТА</div><div id="colors" class="colors"></div></section>
+<section data-page="tools" hidden><div class="tool-grid"><button data-capture="edit">▣<b>Скриншот</b><small>Область, разметка, PNG</small></button><button data-capture="ocr">T<b>Текст с экрана</b><small>Распознавание текста</small></button><button data-capture="qr">▦<b>QR-код</b><small>Прочитать с экрана</small></button><button data-capture="color">◉<b>Пипетка</b><small>Цвет в HEX</small></button><button id="record-button">●<b id="record-label">Запись экрана</b><small>Выбранный монитор</small></button><button data-dictation>♩<b>Голос в текст</b><small id="dictation-hint">Ввод Windows · Win+H</small></button></div><label class="check"><input id="record-audio" type="checkbox" checked> Записывать системный звук</label><p class="hint" id="record-status">Сохранение в MP4, если кодек доступен; иначе WebM.</p><div class="section-label">ТЕКСТОВЫЕ ИНСТРУМЕНТЫ</div><textarea id="text-input" placeholder="Вставь текст…"></textarea><div class="text-actions"><button data-text="upper">АБВ</button><button data-text="lower">абв</button><button data-text="layout">Раскладка</button><button data-text="translit">Транслит</button><button data-text="json">JSON</button><button data-text="encode64">→ Base64</button><button data-text="decode64">← Base64</button><button data-text="url">→ URL</button><button data-text="unurl">← URL</button><button id="text-copy">Копировать</button></div><div class="section-label">НЕДАВНИЕ ЦВЕТА</div><div id="colors" class="colors"></div></section>
 <section data-page="weather" hidden><form id="weather-form" class="inline weather-search"><input id="weather-city" placeholder="Город, например Казань" required><button class="primary">Найти</button></form><div id="weather-result" class="empty">Загружаем прогноз…</div></section>
 <section data-page="search" hidden><input id="command" class="command" placeholder="Приложение, 12 * 8 или таймер 10 мин…" autocomplete="off"><div id="search-results" class="stack"></div><p class="hint">Поиск по твоим ярлыкам · вычисления · «таймер 10 мин» · «напомни через 20 мин позвонить» · поиск в интернете. Enter выполняет первое действие.</p></section>
 <section data-page="network" hidden aria-label="Сетевые инструменты">
   <div class="network-tools">
     <article class="network-tool">
       <h2>Zapret</h2>
-      <p>Управление установленной службой Windows.</p>
+      <p id="zapret-description">Управление установленной службой Windows.</p>
       <strong id="zapret-state" role="status">Проверяем…</strong>
       <div class="network-tool-actions">
         <button type="button" id="zapret-toggle" disabled>Включить</button>
         <button type="button" id="zapret-guide">Инструкция</button>
       </div>
-      <small>Первый запуск: service.bat → Install Service. Windows может запросить права администратора.</small>
+      <small id="zapret-install-hint">Первый запуск: service.bat → Install Service. Windows может запросить права администратора.</small>
     </article>
     <article class="network-tool">
       <h2>TG WS Proxy</h2>
@@ -86,7 +86,7 @@
     <button data-power="shutdown"><span aria-hidden="true">⏻</span>Выключение</button>
   </div>
   <details class="control-extras"><summary>Дополнительно</summary><div class="inline">
-  <button data-system="wifi">Wi-Fi</button><button data-system="vpn">VPN Windows</button><button data-system="sound">Звук</button><button data-system="theme">Цвета</button><button data-system="notifications">Уведомления</button><button id="dictation">Диктовка</button>
+  <button data-system="wifi">Wi-Fi</button><button data-system="vpn">VPN Windows</button><button data-system="sound">Звук</button><button data-system="theme">Цвета</button><button data-system="notifications">Уведомления</button><button data-dictation>Диктовка</button>
 </div><div id="native-status" class="muted"></div></details>
 </section>
 

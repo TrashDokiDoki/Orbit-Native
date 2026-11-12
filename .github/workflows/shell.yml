@@ -121,9 +121,25 @@ jobs:
         if: failure()
         shell: pwsh
         run: |
-          Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000; StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue |
-            Where-Object Message -Like '*OrbitShell.exe*' |
-            Select-Object -First 2 -ExpandProperty Message
+          $crash = Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000; StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue |
+            Where-Object Message -Like '*OrbitShell.exe*' | Select-Object -First 1 -ExpandProperty Message
+          if (!$crash) { return }
+          $crash
+          if ($crash -match 'Fault offset: 0x([a-f0-9]+)' -and (Test-Path build/OrbitShell-Release.map)) {
+            $offset = [Convert]::ToUInt64($Matches[1], 16)
+            $map = Get-Content build/OrbitShell-Release.map
+            $baseLine = $map | Select-String 'Preferred load address is ([a-f0-9]+)' | Select-Object -First 1
+            if ($baseLine) {
+              $address = [Convert]::ToUInt64($baseLine.Matches[0].Groups[1].Value, 16) + $offset
+              $closest = $map | ForEach-Object {
+                if ($_ -match '^\s*[a-f0-9]+:[a-f0-9]+\s+(\S+)\s+([a-f0-9]{12,16})\s+') {
+                  $symbol = [Convert]::ToUInt64($Matches[2], 16)
+                  if ($symbol -le $address) { [pscustomobject] @{Address=$symbol; Name=$Matches[1]} }
+                }
+              } | Sort-Object Address -Descending | Select-Object -First 1
+              if ($closest) { "Fault is near $($closest.Name) at +$($address - $closest.Address)" }
+            }
+          }
       - name: Build Windows installer
         shell: pwsh
         run: |

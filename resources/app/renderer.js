@@ -96,6 +96,8 @@ function renderApps(){const root=$('apps');root.replaceChildren();const groups=n
 let lyricsTrack = '';
 let lyricsRequest = 0;
 let lyricsRequested = false;
+let lyricsRetries = 0;
+let lyricsRetryTimer;
 let lyricLines = [];
 let activeLyric = -1;
 
@@ -116,7 +118,7 @@ function parseLyrics(source) {
 }
 
 function playbackPosition(track) {
-  if (!Number.isFinite(track?.position) || !(track.duration > 0)) return null;
+  if (!Number.isFinite(track?.position) || track.position < 0 || !(track.duration > 0)) return null;
   const age = (Date.now() - track.updatedAt) / 1000;
   const elapsed = track.playing && age > 0 && age < track.duration ? age : 0;
   return Math.max(0, Math.min(track.duration, track.position + elapsed));
@@ -164,7 +166,16 @@ async function loadLyrics() {
     root.replaceChildren(...lyricLines.map(line => text('p', line.content, 'lyrics-line')));
     updatePlayback();
   } catch {
-    if (request === lyricsRequest) root.textContent = 'Не удалось загрузить текст. Закрой и открой текст песни, чтобы повторить.';
+    if (request !== lyricsRequest) return;
+    if (track.playing && lyricsRetries < 1) {
+      lyricsRetries++;
+      root.textContent = 'Повторяем поиск текста…';
+      lyricsRetryTimer = setTimeout(() => {
+        if (request !== lyricsRequest) return;
+        lyricsRequested = false;
+        loadLyrics();
+      }, 2200);
+    } else root.textContent = 'Не удалось загрузить текст. Открой текст песни ещё раз, чтобы повторить.';
   }
 }
 $('lyrics-toggle').onclick = () => {
@@ -172,6 +183,8 @@ $('lyrics-toggle').onclick = () => {
   setLyricsVisible(root.hidden);
   if (!root.hidden) loadLyrics();
   else if (!lyricLines.length) {
+    clearTimeout(lyricsRetryTimer);
+    lyricsRetries = 0;
     lyricsRequest++;
     lyricsRequested = false;
   }
@@ -349,6 +362,8 @@ function renderTrackDetails(track) {
   const key = JSON.stringify([track?.source, track?.title, track?.artist, track?.album]);
   if (key !== lyricsTrack) {
     lyricsTrack = key;
+    clearTimeout(lyricsRetryTimer);
+    lyricsRetries = 0;
     lyricsRequest++;
     lyricsRequested = false;
     lyricLines = [];
@@ -369,7 +384,7 @@ $('track-cover').onerror = () => {
   $('cover-placeholder').hidden = false;
 };
 function renderSystem(){const m=system.media;renderTrackDetails(m);renderMediaSources();renderCompactMedia();setText($('track'),m?.title||'Музыка рядом');setText($('artist'),m?.artist||(m?.title?'':'Включи Spotify или другой плеер'));const playbackLabel=m?.playing?'Пауза':'Воспроизвести';$('play').title=playbackLabel;$('play').setAttribute('aria-label',playbackLabel);updatePlayback();syncPanelWork();animatePlayback(Boolean(m?.playing));$('equalizer').hidden=!m?.playing;$('equalizer').title=m?.title||'';const layout=system.layout===1049?'RU':system.layout===1033?'EN':system.layout?'⌨':'';const battery=system.battery>=0&&system.battery<=100?' · '+system.battery+'%'+(system.plugged?' ⚡':''):'';setText($('system-status'),(layout?layout+(system.caps?' · CAPS':'')+' · ':'')+systemLabel+battery)}
-document.querySelectorAll('[data-media]').forEach(b=>b.onclick=()=>run(api.native('media',{command:b.dataset.media,source:system.media?.source})));document.querySelectorAll('[data-volume]').forEach(b=>b.onclick=()=>run(api.native('volume',{command:b.dataset.volume})));document.querySelectorAll('[data-system]').forEach(b=>b.onclick=()=>run(api.systemLink(b.dataset.system)));if($('dictation'))$('dictation').onclick=()=>run(api.native('dictation'));
+document.querySelectorAll('[data-media]').forEach(b=>b.onclick=()=>run(api.native('media',{command:b.dataset.media,source:system.media?.source})));document.querySelectorAll('[data-volume]').forEach(b=>b.onclick=()=>run(api.native('volume',{command:b.dataset.volume})));document.querySelectorAll('[data-system]').forEach(b=>b.onclick=()=>run(api.systemLink(b.dataset.system)));document.querySelectorAll('[data-dictation]').forEach(button=>button.onclick=()=>run(api.native('dictation')));
 function renderClips(){if(!state)return;$('clip-notice').hidden=settings.clipboard;$('clips').replaceChildren();const q=$('clip-search').value.toLowerCase();const list=state.clips.filter(c=>c.type==='image'?!q:(c.text||'').toLowerCase().includes(q)).sort((a,b)=>Number(b.pinned)-Number(a.pinned));for(const c of list){const card=text('div','','card'+(c.pinned?' pinned':'')),main=button('',()=>run(api.clipAction(c.id,'paste')),'card-main');if(c.type==='image'){const img=document.createElement('img');img.src=c.data;img.alt='Изображение из буфера';main.append(img)}else main.textContent=c.text;const actions=text('div','','card-actions');actions.append(button('Копировать',()=>run(api.clipAction(c.id,'copy'),()=>message('Скопировано'))),button(c.pinned?'Открепить':'Закрепить',()=>run(api.clipAction(c.id,'pin'),clips=>{state.clips=clips;renderClips()})),button('×',()=>run(api.clipAction(c.id,'delete'),clips=>{state.clips=clips;renderClips()})));card.append(main,actions);$('clips').append(card)}if(!list.length&&settings.clipboard)$('clips').append(text('div','Пока пусто. Скопируй текст или картинку.','empty'))}
 $('clip-search').oninput=renderClips;$('clip-clear').onclick=()=>run(api.clipAction(null,'clear'),clips=>{state.clips=clips;renderClips()});
 function renderShelf(){$('shelf').replaceChildren();for(const f of state.shelf){const row=text('div','','card file-row'),drag=text('span','↗','drag-handle');drag.draggable=true;drag.title='Перетащи в другое приложение';drag.ondragstart=e=>{e.preventDefault();api.dragFile(f.id)};row.append(drag,text('strong',f.name),button('Открыть',()=>run(api.shelfAction(f.id,'open'))),button('⌕',()=>run(api.shelfAction(f.id,'reveal'))),button('×',()=>run(api.shelfAction(f.id,'remove'),s=>{state.shelf=s;renderShelf()})));row.title=f.path;$('shelf').append(row);displayFileIcon(drag,f.path)}}$('shelf-add').onclick=()=>run(api.shelfAdd(),s=>{state.shelf=s;renderShelf()});
@@ -753,7 +768,7 @@ $('weather-form').onsubmit = event => {
 };
 setInterval(() => refreshWeather(weatherCity), 15 * 60 * 1000);
 let firstAction;function renderSearch(){const q=$('command').value.trim(),root=$('search-results');root.replaceChildren();firstAction=null;const result=(title,subtitle,fn)=>{const b=button('',fn,'result');b.append(text('span',title),text('small',subtitle));root.append(b);if(!firstAction)firstAction=fn};if(!q){result('Открыть настройки','Внешний вид, приложения и горячие клавиши',()=>showTab('settings'));result('Таймер на 25 минут','Пора сосредоточиться',()=>{startTimer(25);showTab('home')});return}settings.items.forEach((a,i)=>{if(a.name.toLowerCase().includes(q.toLowerCase()))result(a.name,a.group||a.target,()=>run(api.launch(i)))});if(/^[\d\s()+*/.,%×÷-]+$/.test(q)){try{const v=OrbitCore.calculate(q);result('= '+v,'Нажми, чтобы скопировать',()=>run(api.copy(String(v)),()=>message('Скопировано')))}catch{}}const timer=q.match(/^таймер\s+(\d+(?:[.,]\d+)?)\s*(?:мин(?:ут[аы]?)?|м)?$/i);if(timer)result('Запустить таймер на '+timer[1]+' мин','Таймер останется на островке',()=>{startTimer(Number(timer[1].replace(',','.')));showTab('home')});const reminder=q.match(/^напомни\s+через\s+(\d+)\s*(мин(?:ут[аы]?)?|ч(?:ас[аов]*)?)\s+(.+)$/i);if(reminder)result('Напомнить: '+reminder[3],'Через '+reminder[1]+' '+reminder[2],()=>run(api.reminder('add',{text:reminder[3],at:Date.now()+Number(reminder[1])*(reminder[2].startsWith('ч')?3600000:60000)}),list=>{state.reminders=list;message('Напоминание добавлено')}));const controls={wifi:'wifi','wi-fi':'wifi',bluetooth:'bluetooth',vpn:'vpn',звук:'sound',тема:'theme'};if(controls[q.toLowerCase()])result('Открыть '+q,'Параметры Windows',()=>run(api.systemLink(controls[q.toLowerCase()])));result('Поиск: '+q,'Открыть в браузере',()=>run(api.web('https://www.google.com/search?q='+encodeURIComponent(q))))}$('command').oninput=renderSearch;$('command').onkeydown=e=>{if(e.key==='Enter'&&firstAction){e.preventDefault();firstAction()}};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('eq-dialog').open&&!$('power-dialog').open){if(miniOpen)setCompactPlayer(false);else expand(false)}});matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>settings&&applyAppearance());const clockFormat=new Intl.DateTimeFormat('ru-RU',{hour:'2-digit',minute:'2-digit'});function clock(){setText($('clock'),clockFormat.format(new Date()));if(state?.timer||recordStart||!$('pill-status').hidden)renderTimer()}setInterval(clock,1000);run(api.get(),r=>{settings=r.settings;state=r.state;systemLabel=r.systemLabel||'Windows';displays=r.displays;applyAppearance();renderApps();renderSystem();clock();$('weather-city').value=weatherCity;refreshWeather(weatherCity);if(r.hotkeys?.length)message('Клавиши заняты: '+r.hotkeys.join(', '))});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('eq-dialog').open&&!$('power-dialog').open){if(miniOpen)setCompactPlayer(false);else expand(false)}});matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>settings&&applyAppearance());const clockFormat=new Intl.DateTimeFormat('ru-RU',{hour:'2-digit',minute:'2-digit'});function clock(){setText($('clock'),clockFormat.format(new Date()));if(state?.timer||recordStart||!$('pill-status').hidden)renderTimer()}setInterval(clock,1000);run(api.get(),r=>{settings=r.settings;state=r.state;systemLabel=r.systemLabel||'Windows';displays=r.displays;applyPlatformLabels();applyAppearance();renderApps();renderSystem();clock();$('weather-city').value=weatherCity;refreshWeather(weatherCity);if(r.hotkeys?.length)message('Недоступны сочетания: '+r.hotkeys.join(', '))});
 
 const audioLevel = $('audio-level');
 const audioDevice = $('audio-device');
@@ -927,6 +942,14 @@ $('happ-vpn').oncontextmenu = async event => {
   });
 };
 setInterval(() => { if (open) refreshHapp(); }, 3500);
+
+function applyPlatformLabels() {
+  if (systemLabel !== 'Linux') return;
+  $('dictation-hint').textContent = 'Офлайн · русский и английский';
+  $('zapret-description').textContent = 'Управление установленной службой systemd.';
+  $('zapret-install-hint').textContent = 'Установите службу zapret.service. Для переключения могут потребоваться системные права.';
+  document.querySelector('[data-system="vpn"]').textContent = 'VPN системы';
+}
 
 function renderNetworkTools(status) {
   networkStatus = status;

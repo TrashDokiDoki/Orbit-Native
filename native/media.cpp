@@ -123,7 +123,7 @@ void Media::inspect(QStringList players, Track fallback)
             track.album = metadata.value("xesam:album").toString();
             track.duration = metadata.value("mpris:length").toLongLong() / 1000000.0;
             if (state.contains("Position")) track.position = state.value("Position").toLongLong() / 1000000.0;
-            track.updatedAt = QDateTime::currentMSecsSinceEpoch();
+            if (track.playing && track.position >= 0) track.updatedAt = QDateTime::currentMSecsSinceEpoch();
             if (track.playing || name == selection_) {
                 preferred_ = player_ = name;
                 pending_ = false;
