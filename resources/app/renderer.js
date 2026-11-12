@@ -450,7 +450,93 @@ $('quick-add').onclick=()=>run(api.openSettings('apps',true));
 $('quick-text').onclick=()=>{showTab('tools');$('text-input').focus()};
 $('quick-record').onclick=()=>{showTab('tools');toggleRecord()};
 document.querySelectorAll('[data-capture]').forEach(b=>b.onclick=()=>run(api.capture(b.dataset.capture)));
-async function toggleRecord(){if(mediaRecorder&&mediaRecorder.state==='recording'){mediaRecorder.stop();return}try{mediaStream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:30},audio:$('record-audio').checked});recordChunks=[];recordMime=['video/mp4;codecs=avc1.42001E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm'].find(m=>MediaRecorder.isTypeSupported(m));mediaRecorder=new MediaRecorder(mediaStream,{mimeType:recordMime,videoBitsPerSecond:8000000});mediaRecorder.ondataavailable=e=>{if(e.data.size)recordChunks.push(e.data)};mediaRecorder.onstop=async()=>{mediaStream.getTracks().forEach(t=>t.stop());recordStart=0;$('record-label').textContent='Запись экрана';$('record-status').textContent='Сохраняем запись…';await api.recordState(false);const blob=new Blob(recordChunks,{type:recordMime});await run(api.recordSave(await blob.arrayBuffer(),recordMime),r=>{$('record-status').textContent=r.saved?'Запись сохранена':'Сохранение отменено'});recordChunks=[];mediaRecorder=null};mediaRecorder.onerror=()=>{message('Ошибка записи экрана');mediaStream.getTracks().forEach(t=>t.stop());recordStart=0;api.recordState(false)};mediaStream.getVideoTracks()[0].onended=()=>{if(mediaRecorder?.state==='recording')mediaRecorder.stop()};mediaRecorder.start(1000);recordStart=Date.now();await api.recordState(true);$('record-label').textContent='Остановить запись';$('record-status').textContent='Идёт запись · '+(recordMime.includes('mp4')?'MP4':'WebM')+' · нажми ещё раз для сохранения';message('')}catch(e){mediaStream?.getTracks().forEach(t=>t.stop());recordStart=0;message('Не удалось начать запись: '+e.message)}}$('record-button').onclick=toggleRecord;
+let recordStarting = false;
+async function toggleRecord() {
+  if (mediaRecorder?.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+  if (recordStarting || mediaRecorder) return;
+  recordStarting = true;
+  const streamWriter = api.recordStream;
+  let saveQueue = Promise.resolve();
+  let recordError;
+  try {
+    mediaStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30 },
+      audio: $('record-audio').checked
+    });
+    recordChunks = [];
+    const mime = ['video/mp4;codecs=avc1.42001E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm']
+      .find(type => MediaRecorder.isTypeSupported(type));
+    mediaRecorder = new MediaRecorder(mediaStream, { ...(mime ? {mimeType:mime} : {}), videoBitsPerSecond:8000000 });
+    recordMime = mediaRecorder.mimeType || mime || 'video/webm';
+    if (streamWriter) {
+      const result = await streamWriter.begin(recordMime);
+      if (result?.error) throw Error(result.error);
+    }
+    mediaRecorder.ondataavailable = ({data}) => {
+      if (!data.size || recordError) return;
+      if (!streamWriter) {
+        recordChunks.push(data);
+        return;
+      }
+      saveQueue = saveQueue.then(async () => {
+        if (recordError) return;
+        const result = await streamWriter.chunk(data);
+        if (result?.error) throw Error(result.error);
+      }).catch(error => {
+        recordError = error;
+        if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+      });
+    };
+    mediaRecorder.onstop = async () => {
+      mediaStream.getTracks().forEach(track => track.stop());
+      recordStart = 0;
+      $('record-label').textContent = 'Запись экрана';
+      $('record-status').textContent = 'Сохраняем запись…';
+      await api.recordState(false);
+      await saveQueue;
+      if (recordError) {
+        await streamWriter?.discard();
+        $('record-status').textContent = recordError.message;
+      } else {
+        const save = async () => streamWriter ? streamWriter.finish() :
+          api.recordSave(await new Blob(recordChunks,{type:recordMime}).arrayBuffer(), recordMime);
+        const result = await run(save());
+        $('record-status').textContent = result?.saved ? 'Запись сохранена' :
+          result ? 'Сохранение отменено' : 'Не удалось сохранить запись';
+      }
+      recordChunks = [];
+      mediaRecorder = null;
+      mediaStream = null;
+    };
+    mediaRecorder.onerror = () => {
+      recordError = Error('Ошибка записи экрана');
+      if (mediaRecorder.state === 'recording') mediaRecorder.stop();
+    };
+    mediaStream.getVideoTracks()[0].onended = () => {
+      if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
+    };
+    mediaRecorder.start(1000);
+    recordStart = Date.now();
+    await api.recordState(true);
+    $('record-label').textContent = 'Остановить запись';
+    $('record-status').textContent = 'Идёт запись · ' + (recordMime.includes('mp4')?'MP4':'WebM') +
+      ' · нажми ещё раз для сохранения';
+    message('');
+  } catch (error) {
+    mediaStream?.getTracks().forEach(track => track.stop());
+    await streamWriter?.discard();
+    recordStart = 0;
+    mediaRecorder = null;
+    mediaStream = null;
+    message('Не удалось начать запись: ' + error.message);
+  } finally {
+    recordStarting = false;
+  }
+}
+$('record-button').onclick = toggleRecord;
 let weatherCity = localStorage.getItem('weather-city') || 'Москва';
 let weatherRequest = 0;
 let lastForecast;

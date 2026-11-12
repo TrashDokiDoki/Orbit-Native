@@ -17,6 +17,25 @@
       listeners.get(channel).push(listener);
     };
   }
+  api.recordStream = Object.freeze({
+    begin: mime => call('record-begin', mime),
+    chunk: async blob => {
+      for (let offset = 0; offset < blob.size; offset += 512 * 1024) {
+        const slice = blob.slice(offset, offset + 512 * 1024);
+        const encoded = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () => reject(reader.error);
+          reader.onload = () => resolve(reader.result.split(',')[1]);
+          reader.readAsDataURL(slice);
+        });
+        const result = await call('record-chunk', encoded);
+        if (result?.error) return result;
+      }
+      return true;
+    },
+    finish: () => call('record-finish'),
+    discard: () => call('record-discard')
+  });
   api.controlsView = visible => void call('controls-view', visible);
   api.dragFile = id => void call('drag-file', id);
   api.filePath = () => '';

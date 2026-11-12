@@ -378,6 +378,10 @@ private:
                     sources: system.sources
                   });
                   else {
+                    const recorder = await orbit.recordStream.begin('video/webm');
+                    const fragment = recorder === true && await orbit.recordStream.chunk(new Blob([new Uint8Array([0x1a,0x45,0xdf,0xa3])]));
+                    await orbit.recordStream.discard();
+                    if (fragment !== true) { window.orbitShellTest(false, {stage:'record stream', fragment}); return; }
                     await orbitShellTrace('open capture editor');
                     const capture = await orbit.capture('edit');
                     if (capture?.error) window.orbitShellTest(false, {stage:'capture', capture});
@@ -416,6 +420,27 @@ private:
 #ifdef Q_OS_LINUX
         auto *browser = WEBKIT_WEB_VIEW(webview_get_native_handle(window, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
         if (browser && island) {
+            webkit_settings_set_enable_media_stream(webkit_web_view_get_settings(browser), TRUE);
+            auto *trustedUrl = g_strdup(address.constData());
+            g_signal_connect_data(browser, "permission-request", G_CALLBACK(+[](WebKitWebView *view,
+                WebKitPermissionRequest *request, gpointer data) -> gboolean {
+                if (!WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request) ||
+                    !webkit_user_media_permission_is_for_display_device(WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request)) ||
+                    g_strcmp0(webkit_web_view_get_uri(view), static_cast<const gchar *>(data)) != 0) return FALSE;
+                auto *parent = GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+                auto *dialog = gtk_message_dialog_new(parent, GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION,
+                    GTK_BUTTONS_NONE, "%s", "Разрешить Orbit записывать экран?");
+                gtk_dialog_add_buttons(GTK_DIALOG(dialog), "Отмена", GTK_RESPONSE_CANCEL,
+                    "Продолжить", GTK_RESPONSE_ACCEPT, nullptr);
+                g_signal_connect_data(dialog, "response", G_CALLBACK(+[](GtkDialog *dialog, gint response, gpointer context) {
+                    auto *permission = WEBKIT_PERMISSION_REQUEST(context);
+                    if (response == GTK_RESPONSE_ACCEPT) webkit_permission_request_allow(permission);
+                    else webkit_permission_request_deny(permission);
+                    gtk_widget_destroy(GTK_WIDGET(dialog));
+                }), g_object_ref(request), +[](gpointer request, GClosure *) { g_object_unref(request); }, G_CONNECT_DEFAULT);
+                gtk_widget_show(dialog);
+                return TRUE;
+            }), trustedUrl, +[](gpointer url, GClosure *) { g_free(url); }, G_CONNECT_DEFAULT);
             g_signal_connect(browser, "drag-data-received", G_CALLBACK(+[](GtkWidget *, GdkDragContext *, gint, gint,
                 GtkSelectionData *selection, guint, guint, gpointer context) {
                 auto *self = static_cast<OrbitShellController *>(context);
@@ -631,7 +656,7 @@ private:
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
         RECT client{};
         if (!GetClientRect(hwnd, &client)) return;
-        const auto scale = GetDpiForWindow(hwnd) / 96.0;
+        const auto scale = GetDpiForWindow(hwnd) / 96.0 * lastScale_;
         const auto left = std::clamp(qRound(metrics.value("x").toDouble() * scale), 0, int(client.right));
         const auto top = std::clamp(qRound(metrics.value("y").toDouble() * scale), 0, int(client.bottom));
         const auto width = std::clamp(qRound(metrics.value("width").toDouble() * scale), 0, int(client.right) - left);
@@ -675,7 +700,25 @@ private:
         const auto mode = settings_.value("musicMode").toString();
         const int compactWidth = !musicPlaying_ ? 184 : mode == "cover" ? 232 : 366;
         const bool panel = expanded_ || collapse_.isActive();
-        const QSize size(panel ? 856 : compactWidth, panel ? 514 : mini_ ? 94 : 38);
+        const auto scale = (std::min)({
+            std::clamp(settings_.value("scale").toDouble(1), .8, 2.0),
+            (std::max)(.4, (area.width() - 32) / 856.0),
+            (std::max)(.4, (area.bottom() - top - 7) / 514.0)
+        });
+        const QSize size(qRound((panel ? 856 : compactWidth) * scale),
+                         qRound((panel ? 514 : mini_ ? 94 : 38) * scale));
+        const bool clickThrough = !panel && !mini_ && settings_.value("clickThrough").toBool();
+        if (lastScale_ != scale) {
+            lastScale_ = scale;
+#ifdef Q_OS_WIN
+            auto *controller = static_cast<ICoreWebView2Controller *>(
+                webview_get_native_handle(main_, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
+            if (controller) controller->put_ZoomFactor(scale);
+#elif defined(Q_OS_LINUX)
+            auto *browser = WEBKIT_WEB_VIEW(webview_get_native_handle(main_, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
+            if (browser) webkit_web_view_set_zoom_level(browser, scale);
+#endif
+        }
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
         if (lastWindowSize_ != size) SetWindowRgn(hwnd, nullptr, TRUE);
@@ -701,12 +744,12 @@ private:
             const int y = edge ? info.rcMonitor.top : info.rcWork.top + qRound((top - area.top()) * dpi);
             SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
         }
-        if (opacity < 1) {
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) | WS_EX_LAYERED);
-            SetLayeredWindowAttributes(hwnd, 0, BYTE(qRound(opacity * 255)), LWA_ALPHA);
-        } else if (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) {
-            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & ~WS_EX_LAYERED);
-        }
+        const auto previous = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        auto extra = previous & ~(WS_EX_LAYERED | WS_EX_TRANSPARENT);
+        if (opacity < 1 || clickThrough) extra |= WS_EX_LAYERED;
+        if (clickThrough) extra |= WS_EX_TRANSPARENT;
+        if (extra != previous) SetWindowLongPtrW(hwnd, GWL_EXSTYLE, extra);
+        if (extra & WS_EX_LAYERED) SetLayeredWindowAttributes(hwnd, 0, BYTE(qRound(opacity * 255)), LWA_ALPHA);
 #elif defined(Q_OS_LINUX)
         int x = area.x() + (area.width() - size.width()) / 2;
         if (position == "left") x = area.left() + 16;
@@ -714,6 +757,11 @@ private:
         auto *window = GTK_WINDOW(webview_get_window(main_));
         gtk_window_move(window, x, top);
         gtk_widget_set_opacity(GTK_WIDGET(window), opacity);
+        if (auto *surface = gtk_widget_get_window(GTK_WIDGET(window))) {
+            auto *region = clickThrough ? cairo_region_create() : nullptr;
+            gdk_window_input_shape_combine_region(surface, region, 0, 0);
+            if (region) cairo_region_destroy(region);
+        }
 #endif
     }
 
@@ -1125,6 +1173,51 @@ private:
         return QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.data().toBase64());
     }
 
+    QJsonValue beginRecording(const QString &mime)
+    {
+        if (recordFile_) return error(QStringLiteral("Запись уже открыта"));
+        if (mime.startsWith("video/mp4")) recordExtension_ = "mp4";
+        else if (mime.startsWith("video/webm")) recordExtension_ = "webm";
+        else return error(QStringLiteral("Формат записи не поддерживается"));
+        auto temporary = std::make_unique<QTemporaryFile>();
+        if (!temporary->open()) return error(QStringLiteral("Не удалось создать временный файл записи"));
+        recordFile_ = std::move(temporary);
+        return true;
+    }
+
+    QJsonValue writeRecording(const QString &encoded)
+    {
+        if (!recordFile_ || encoded.size() > 768 * 1024)
+            return error(QStringLiteral("Не удалось получить фрагмент записи"));
+        const auto result = QByteArray::fromBase64Encoding(encoded.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+        if (!result || result.decoded.isEmpty() || result.decoded.size() > 512 * 1024)
+            return error(QStringLiteral("Получен повреждённый фрагмент записи"));
+        if (recordFile_->write(result.decoded) != result.decoded.size())
+            return error(QStringLiteral("Не удалось записать фрагмент на диск"));
+        return true;
+    }
+
+    QJsonValue saveRecording()
+    {
+        auto input = std::move(recordFile_);
+        if (!input || !input->size() || !input->flush() || !input->seek(0))
+            return error(QStringLiteral("Запись экрана пуста"));
+        const QDir videos(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
+        const auto filename = "Orbit-" + QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss") + '.' + recordExtension_;
+        const auto path = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Сохранить запись Orbit"),
+                                                      videos.filePath(filename), recordExtension_.toUpper() + " (*." + recordExtension_ + ')');
+        if (path.isEmpty()) return QJsonObject{{"saved", false}};
+        QSaveFile output(path);
+        if (!output.open(QIODevice::WriteOnly)) return error(QStringLiteral("Не удалось открыть файл для записи"));
+        while (!input->atEnd()) {
+            const auto chunk = input->read(1024 * 1024);
+            if (chunk.isEmpty() || output.write(chunk) != chunk.size())
+                return error(QStringLiteral("Не удалось сохранить запись"));
+        }
+        if (!output.commit()) return error(QStringLiteral("Не удалось сохранить запись"));
+        return QJsonObject{{"saved", true}};
+    }
+
     QJsonValue timer(const QJsonObject &command)
     {
         const auto action = command.value("action").toString();
@@ -1222,7 +1315,9 @@ private:
             snapshot_ = QJsonObject{{"image", QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.data().toBase64())},
                 {"mode", mode}};
             if (!editor_) {
+                if (testing_) std::fprintf(stderr, "Orbit smoke: creating editor window\n");
                 editor_ = webview_create(false, nullptr);
+                if (testing_) std::fprintf(stderr, "Orbit smoke: initializing editor page\n");
                 if (editor_ && !open(editor_, "capture.html", false)) { webview_destroy(editor_); editor_ = nullptr; }
             } else {
                 emitTo(editor_, "capture", snapshot_);
@@ -1246,6 +1341,7 @@ private:
             gtk_window_fullscreen(GTK_WINDOW(webview_get_window(editor_)));
 #endif
             visible(editor_, true);
+            if (testing_) std::fprintf(stderr, "Orbit smoke: editor shown\n");
             capturePending_ = false;
             done(true);
         });
@@ -1529,7 +1625,8 @@ private:
                 displays.append(QJsonObject{{"index", int(i)}, {"label", name.isEmpty() ? QStringLiteral("Монитор %1").arg(i+1) : name}});
             }
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
-                    {"systemLabel", system}, {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_}});
+                    {"systemLabel", system}, {"platform", system == "Windows" ? "win32" : "linux"},
+                    {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_}});
             if (window == preferences_) emitTo(preferences_, "settings-section", QJsonObject{{"section", settingsSection_}});
             if (window == main_ && !lastSystem_.isEmpty()) emitTo(main_, "system", lastSystem_);
         } else if (command == "expand" && window == main_) {
@@ -1587,6 +1684,19 @@ private:
             else respond(true);
         } else if (command == "weather") {
             weather(first.toString(), respond);
+        } else if (command == "record-begin" && window == main_) {
+            respond(beginRecording(first.toString()));
+        } else if (command == "record-chunk" && window == main_) {
+            respond(writeRecording(first.toString()));
+        } else if (command == "record-finish" && window == main_) {
+            QTimer::singleShot(0, this, [this, respond] { respond(saveRecording()); });
+        } else if (command == "record-discard" && window == main_) {
+            recordFile_.reset();
+            respond(true);
+        } else if (command == "record-state" && window == main_) {
+            recording_ = first.toBool();
+            emitTo(main_, "recording", recording_);
+            respond(true);
         } else if (command == "capture" && window == main_) {
             capture(first.toString(), respond);
         } else if (command == "capture-ready" && window == editor_) {
@@ -1751,10 +1861,14 @@ private:
     bool inactive_ = false;
     bool keyboardKnown_ = false;
     QSize lastWindowSize_;
+    double lastScale_ = 1;
     bool expanded_ = false;
     bool mini_ = false;
     bool musicPlaying_ = false;
     bool gpuEnabled_ = true;
+    bool recording_ = false;
+    QString recordExtension_;
+    std::unique_ptr<QTemporaryFile> recordFile_;
     QUrl coverUrl_;
     QString fetchedCover_;
     quint64 coverRequest_ = 0;
