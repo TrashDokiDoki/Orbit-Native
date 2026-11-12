@@ -9,7 +9,7 @@ StrCmp $0 "0.0.0.0" orbit_webview_install orbit_webview_ready
 orbit_webview_install:
 InitPluginsDir
 SetOutPath "$PLUGINSDIR"
-File /oname=OrbitWebView2Setup.exe "@ORBIT_WEBVIEW2_BOOTSTRAPPER@"
+File /oname=OrbitWebView2Setup.exe "@orbit_webview_bootstrapper_native@"
 ExecWait '"$PLUGINSDIR\OrbitWebView2Setup.exe" /silent /install' $0
 Delete "$PLUGINSDIR\OrbitWebView2Setup.exe"
 StrCmp $0 "0" orbit_webview_ready
