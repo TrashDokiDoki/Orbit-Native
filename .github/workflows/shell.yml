@@ -70,6 +70,24 @@ jobs:
           echo "dcfea5712c43a43ba7ae8083afb39d36993e5a69c46e88b68aaa72b65cb615bb  $RUNNER_TEMP/dictation.wav" | sha256sum -c
           sox "$RUNNER_TEMP/dictation.wav" -r 16000 -c 1 -e signed-integer -b 16 -L -t raw "$RUNNER_TEMP/dictation.pcm"
           ORBIT_TEST_AUDIO=1 ORBIT_TEST_DICTATION_PCM="$RUNNER_TEMP/dictation.pcm" xvfb-run -a OrbitShell --smoke-test
+      - name: Launch the installed package on Wayland
+        if: matrix.arch == 'x64'
+        run: |
+          sudo apt-get install -y weston
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          export WAYLAND_DISPLAY=orbit-wayland
+          unset DISPLAY
+          weston --backend=headless-backend.so --socket="$WAYLAND_DISPLAY" --width=1280 --height=960 --idle-time=0 > "$RUNNER_TEMP/weston.log" 2>&1 &
+          compositor=$!
+          trap 'kill "$compositor" 2>/dev/null || true; cat "$RUNNER_TEMP/weston.log"' EXIT
+          for attempt in {1..40}; do
+            if test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"; then break; fi
+            sleep .25
+          done
+          test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+          QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland timeout 60s dbus-run-session -- OrbitShell --smoke-test
+      - name: Remove the Debian package
+        run: |
           sudo apt-get remove -y orbit-native-shell
           test ! -e /usr/bin/OrbitShell
       - uses: actions/upload-artifact@v4
