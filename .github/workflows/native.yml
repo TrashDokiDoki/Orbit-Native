@@ -12,14 +12,22 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins
+      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins dpkg-dev
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - run: cmake --build build --parallel
       - run: ctest --test-dir build --output-on-failure
+      - run: cpack --config build/CPackConfig.cmake -B package
+      - name: Test installed Debian package
+        run: |
+          sudo apt-get install -y ./package/orbit-native_*.deb
+          QT_QPA_PLATFORM=offscreen OrbitNative --smoke-test
+          sudo apt-get remove -y orbit-native
+          test ! -e /usr/bin/OrbitNative
       - uses: actions/upload-artifact@v4
         with:
           name: OrbitNative-linux-x64
-          path: build/OrbitNative
+          path: package/*.deb
+          if-no-files-found: error
   windows:
     runs-on: windows-2025
     steps:
@@ -28,14 +36,26 @@ jobs:
         with:
           version: '6.8.3'
           arch: win64_msvc2022_64
+      - run: choco install nsis --yes --no-progress
       - run: cmake -S . -B build -A x64
       - run: cmake --build build --config Release --parallel
       - run: ctest --test-dir build --build-config Release --output-on-failure
-      - run: |
-          New-Item -ItemType Directory -Path package | Out-Null
-          Copy-Item build/Release/OrbitNative.exe package/
-          windeployqt --release --no-translations package/OrbitNative.exe
+      - run: cpack --config build/CPackConfig.cmake -C Release -B package
+      - name: Test installed Windows package
+        shell: pwsh
+        run: |
+          $installer = Get-Item package/OrbitNative-*-windows-x64.exe
+          $dest = Join-Path $env:RUNNER_TEMP 'OrbitNative-test'
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$dest") -WindowStyle Hidden -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exit code $($setup.ExitCode)" }
+          $exe = Join-Path $dest 'bin/OrbitNative.exe'
+          $test = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru
+          if (!$test.WaitForExit(15000)) { Stop-Process -Id $test.Id; throw 'Smoke test timed out' }
+          if ($test.ExitCode -ne 0) { throw "Smoke test exit code $($test.ExitCode)" }
+          $remove = Start-Process -FilePath (Join-Path $dest 'Uninstall.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
+          if ($remove.ExitCode -ne 0 -or (Test-Path $exe)) { throw 'Uninstall failed' }
       - uses: actions/upload-artifact@v4
         with:
           name: OrbitNative-windows-x64
-          path: package/
+          path: package/OrbitNative-*-windows-x64.exe
+          if-no-files-found: error

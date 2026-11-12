@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Orbit Native
+Comment=Desktop island and launcher
+Exec=OrbitNative
+Icon=orbit-native
+Terminal=false
+Categories=Utility;

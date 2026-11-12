@@ -1,7 +1,10 @@
 #include "media.h"
+#include "workspace.h"
 #include <QApplication>
 #include <QCloseEvent>
 #include <QDateTime>
+#include <QDateTimeEdit>
+#include <QCheckBox>
 #include <QDesktopServices>
 #include <QDragEnterEvent>
 #include <QFileDialog>
@@ -29,6 +32,7 @@
 #include <QUrlQuery>
 #include <QVBoxLayout>
 #include <functional>
+#include <utility>
 
 class Island final : public QWidget {
 public:
@@ -77,6 +81,9 @@ public:
         createShelf();
         createNotes();
         createTimer();
+        createReminders();
+        addClipboardPage(tabs_, settings_);
+        addToolsPage(tabs_);
 
         hover_.setSingleShot(true);
         hover_.setInterval(150);
@@ -97,6 +104,7 @@ public:
         expand(false);
         if (!testing) {
             createTray();
+            scheduleReminders();
             updateWeather();
             weatherTimer_.start();
             media_.refresh();
@@ -107,7 +115,7 @@ public:
     {
         const bool compact = width() == 224 && tabs_->isHidden();
         expand(true);
-        const bool expanded = width() > 224 && !tabs_->isHidden() && tabs_->count() == 5;
+        const bool expanded = width() > 224 && !tabs_->isHidden() && tabs_->count() == 8;
         expand(false);
         return compact && expanded && width() == 224;
     }
@@ -174,12 +182,14 @@ private:
         title_ = new QLabel(tr("Музыка рядом"));
         title_->setObjectName("title");
         title_->setWordWrap(true);
+        title_->setTextFormat(Qt::PlainText);
 #ifdef Q_OS_WIN
         artist_ = new QLabel(tr("Управление системными медиаклавишами"));
 #else
         artist_ = new QLabel(tr("Откройте плеер с поддержкой MPRIS"));
 #endif
         artist_->setWordWrap(true);
+        artist_->setTextFormat(Qt::PlainText);
         info->addWidget(title_);
         info->addWidget(artist_);
         auto *transport = new QHBoxLayout;
@@ -222,6 +232,12 @@ private:
         weather_->setTextFormat(Qt::PlainText);
         weather_->setObjectName("title");
         layout->addWidget(weather_);
+        auto *forecast = new QTabWidget;
+        hours_ = new QListWidget;
+        week_ = new QListWidget;
+        forecast->addTab(hours_, tr("Часы"));
+        forecast->addTab(week_, tr("Неделя"));
+        layout->addWidget(forecast, 1);
         auto *buttons = new QHBoxLayout;
         button(buttons, tr("Выбрать город"), [this] {
             bool ok = false;
@@ -236,7 +252,6 @@ private:
         buttons->addStretch();
         layout->addLayout(buttons);
         layout->addWidget(new QLabel(tr("Данные Open-Meteo")));
-        layout->addStretch();
     }
 
     void json(const QUrl &url, std::function<void(QJsonObject)> done)
@@ -270,6 +285,8 @@ private:
             forecastQuery.setQueryItems({{"latitude", QString::number(place.value("latitude").toDouble())},
                 {"longitude", QString::number(place.value("longitude").toDouble())},
                 {"current", "temperature_2m,apparent_temperature,weather_code"},
+                {"hourly", "temperature_2m,weather_code,precipitation"},
+                {"daily", "temperature_2m_min,temperature_2m_max,weather_code"},
                 {"timezone", "auto"}});
             forecast.setQuery(forecastQuery);
             json(forecast, [this, request, place](const QJsonObject &data) {
@@ -278,12 +295,53 @@ private:
                 if (!current.value("temperature_2m").isDouble()) { weather_->setText(tr("Прогноз недоступен")); return; }
                 const auto degrees = QString::number(qRound(current.value("temperature_2m").toDouble())) + QStringLiteral("°");
                 const int code = current.value("weather_code").toInt();
-                const QString symbol = code <= 1 ? QStringLiteral("☀") : code <= 3 ? QStringLiteral("☁") : QStringLiteral("☂");
+                const QString symbol = weatherIcon(code);
                 temperature_->setText(symbol + " " + degrees);
                 weather_->setText(place.value("name").toString() + "\n" + symbol + " " + degrees +
                     tr(" · Ощущается как %1°").arg(qRound(current.value("apparent_temperature").toDouble())));
+                showForecast(data, current.value("time").toString());
             });
         });
+    }
+
+    static QString weatherIcon(int code)
+    {
+        if (code <= 1) return QStringLiteral("☀");
+        if (code <= 3) return QStringLiteral("☁");
+        if (code == 45 || code == 48) return QStringLiteral("≋");
+        if ((code >= 71 && code <= 77) || code == 85 || code == 86) return QStringLiteral("❄");
+        return QStringLiteral("☂");
+    }
+
+    void showForecast(const QJsonObject &data, const QString &now)
+    {
+        hours_->clear();
+        week_->clear();
+        const auto hourly = data.value("hourly").toObject();
+        const auto time = hourly.value("time").toArray();
+        const auto degrees = hourly.value("temperature_2m").toArray();
+        const auto weather = hourly.value("weather_code").toArray();
+        const auto rain = hourly.value("precipitation").toArray();
+        const int count = qMin(qMin(time.size(), degrees.size()), qMin(weather.size(), rain.size()));
+        for (int i = 0; i < count && hours_->count() < 24; ++i) {
+            const auto stamp = time.at(i).toString();
+            if (stamp.left(13) < now.left(13)) continue;
+            const auto amount = rain.at(i).toDouble();
+            hours_->addItem(stamp.mid(11, 5) + "    " + weatherIcon(weather.at(i).toInt()) + "    " +
+                            QString::number(qRound(degrees.at(i).toDouble())) + QStringLiteral("°") +
+                            (amount > 0 ? tr("    %1 мм").arg(amount, 0, 'f', 1) : QString()));
+        }
+        const auto daily = data.value("daily").toObject();
+        const auto days = daily.value("time").toArray();
+        const auto low = daily.value("temperature_2m_min").toArray();
+        const auto high = daily.value("temperature_2m_max").toArray();
+        const auto codes = daily.value("weather_code").toArray();
+        const int dayCount = qMin(qMin(days.size(), low.size()), qMin(high.size(), codes.size()));
+        for (int i = 0; i < dayCount; ++i) {
+            const auto date = QDate::fromString(days.at(i).toString(), Qt::ISODate);
+            week_->addItem(date.toString("dd.MM") + "    " + weatherIcon(codes.at(i).toInt()) + "    " +
+                           tr("%1° … %2°").arg(qRound(low.at(i).toDouble())).arg(qRound(high.at(i).toDouble())));
+        }
     }
 
     void createShelf()
@@ -335,9 +393,110 @@ private:
         connect(notes, &QTextEdit::textChanged, this, [this, notes] { settings_.setValue("notes/text", notes->toPlainText()); });
     }
 
+    void createReminders()
+    {
+        auto *layout = page(tr("Напоминания"));
+        reminderPage_ = tabs_->count() - 1;
+        reminders_ = new QListWidget;
+        reminderMessage_ = new QLabel;
+        reminderMessage_->setWordWrap(true);
+        reminderMessage_->setTextFormat(Qt::PlainText);
+        layout->addWidget(reminderMessage_);
+        layout->addWidget(reminders_);
+        auto *entry = new QHBoxLayout;
+        auto *text = new QLineEdit;
+        text->setPlaceholderText(tr("Текст напоминания"));
+        text->setMaxLength(500);
+        auto *when = new QDateTimeEdit(QDateTime::currentDateTime().addSecs(600));
+        when->setDisplayFormat("dd.MM.yyyy HH:mm");
+        when->setCalendarPopup(true);
+        auto *daily = new QCheckBox(tr("Ежедневно"));
+        entry->addWidget(text, 1);
+        entry->addWidget(when);
+        entry->addWidget(daily);
+        button(entry, tr("Добавить"), [this, text, when, daily] {
+            if (text->text().trimmed().isEmpty() || when->dateTime() <= QDateTime::currentDateTime()) {
+                reminderMessage_->setText(tr("Введите текст и выберите время в будущем"));
+                return;
+            }
+            reminderEntries_.append(QVariantMap{{"text", text->text().trimmed()},
+                {"at", when->dateTime().toMSecsSinceEpoch()}, {"daily", daily->isChecked()}});
+            text->clear();
+            reminderMessage_->clear();
+            saveReminders();
+        });
+        layout->addLayout(entry);
+        button(layout, tr("Удалить выбранное"), [this] {
+            if (reminders_->currentRow() < 0) return;
+            reminderEntries_.removeAt(reminders_->currentRow());
+            saveReminders();
+        });
+        reminderEntries_ = settings_.value("reminders/items").toList();
+        renderReminders();
+        reminderTimer_.setSingleShot(true);
+        connect(&reminderTimer_, &QTimer::timeout, this, &Island::checkReminders);
+    }
+
+    void renderReminders()
+    {
+        reminders_->clear();
+        for (const auto &entry : std::as_const(reminderEntries_)) {
+            const auto value = entry.toMap();
+            const auto date = QDateTime::fromMSecsSinceEpoch(value.value("at").toLongLong());
+            reminders_->addItem(date.toString("dd.MM HH:mm") + "  ·  " + value.value("text").toString() +
+                                (value.value("daily").toBool() ? tr("  ·  Ежедневно") : QString()));
+        }
+    }
+
+    void saveReminders()
+    {
+        settings_.setValue("reminders/items", reminderEntries_);
+        renderReminders();
+        scheduleReminders();
+    }
+
+    void scheduleReminders()
+    {
+        reminderTimer_.stop();
+        if (reminderEntries_.isEmpty()) return;
+        const auto now = QDateTime::currentMSecsSinceEpoch();
+        qint64 wait = 30000;
+        for (const auto &entry : std::as_const(reminderEntries_)) {
+            wait = qMin(wait, entry.toMap().value("at").toLongLong() - now);
+        }
+        reminderTimer_.start(int(qMax<qint64>(0, wait)));
+    }
+
+    void checkReminders()
+    {
+        const auto now = QDateTime::currentDateTime();
+        QStringList due;
+        for (int i = reminderEntries_.size() - 1; i >= 0; --i) {
+            auto value = reminderEntries_[i].toMap();
+            auto date = QDateTime::fromMSecsSinceEpoch(value.value("at").toLongLong());
+            if (date > now) continue;
+            due.prepend(value.value("text").toString());
+            if (value.value("daily").toBool()) {
+                do { date = date.addDays(1); } while (date <= now);
+                value["at"] = date.toMSecsSinceEpoch();
+                reminderEntries_[i] = value;
+            } else {
+                reminderEntries_.removeAt(i);
+            }
+        }
+        if (due.isEmpty()) { scheduleReminders(); return; }
+        const auto message = due.join("\n");
+        reminderMessage_->setText(message);
+        if (tray_ && QSystemTrayIcon::supportsMessages()) tray_->showMessage(tr("Напоминание"), message);
+        expand(true);
+        tabs_->setCurrentIndex(reminderPage_);
+        saveReminders();
+    }
+
     void createTimer()
     {
         auto *layout = page(tr("Таймер"));
+        timerPage_ = tabs_->count() - 1;
         timerLabel_ = new QLabel(tr("Таймер не запущен"));
         timerLabel_->setObjectName("title");
         layout->addWidget(timerLabel_);
@@ -369,7 +528,7 @@ private:
         updateClock();
         if (tray_ && QSystemTrayIcon::supportsMessages()) tray_->showMessage("Orbit Native", tr("Время вышло"));
         expand(true);
-        tabs_->setCurrentIndex(tabs_->count() - 1);
+        tabs_->setCurrentIndex(timerPage_);
         timerLabel_->setText(tr("Таймер завершён"));
     }
 
@@ -425,7 +584,7 @@ private:
 
     QSettings settings_;
     Media media_{this};
-    QTimer hover_, leave_, clockTimer_, alarm_, weatherTimer_;
+    QTimer hover_, leave_, clockTimer_, alarm_, weatherTimer_, reminderTimer_;
     QNetworkAccessManager *network_ = nullptr;
     QSystemTrayIcon *tray_ = nullptr;
     QWidget *card_ = nullptr, *header_ = nullptr;
@@ -434,11 +593,15 @@ private:
     QLabel *title_ = nullptr, *artist_ = nullptr, *cover_ = nullptr, *weather_ = nullptr, *timerLabel_ = nullptr;
     QPushButton *panelButton_ = nullptr;
     QTabWidget *tabs_ = nullptr;
-    QListWidget *shelf_ = nullptr;
+    QListWidget *shelf_ = nullptr, *reminders_ = nullptr, *hours_ = nullptr, *week_ = nullptr;
+    QLabel *reminderMessage_ = nullptr;
+    QVariantList reminderEntries_;
     QPixmap pet_;
     QUrl coverUrl_;
     QString city_;
     int weatherRequest_ = 0;
+    int timerPage_ = 0;
+    int reminderPage_ = 0;
     qint64 deadline_ = 0;
     bool open_ = false;
     bool hoverEnabled_ = settings_.value("island/hover", true).toBool();
