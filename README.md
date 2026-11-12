@@ -60,6 +60,8 @@ cmake --build build --target OrbitShell --parallel
 
 ### Установщики WebView Preview
 
+[Скачать Windows EXE и Ubuntu DEB](https://github.com/TrashDokiDoki/Orbit-Native/releases/tag/v0.3.0-shell-preview).
+
 Сборки с `-DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON` выпускают отдельный пакет предварительной версии. Windows x64 получает NSIS-установщик с библиотеками Qt. При отсутствии WebView2 установщик сам запускает подписанный загрузчик Microsoft. Для загрузки рантайма нужен интернет. Сборщику Windows нужно передать `-DORBIT_WEBVIEW2_BOOTSTRAPPER=<путь к подписанному EXE Microsoft>`.
 
 Для Ubuntu 24.04 x64 пакет `.deb` объявляет зависимости Qt, WebKitGTK и OCR. Откройте его в менеджере пакетов с поддержкой установки локальных DEB или выполните `sudo apt install ./orbit-native-shell_0.3.0_amd64.deb`. Пакеты Linux используют системные библиотеки. OCR на Windows в этой предварительной сборке пока требует Tesseract в PATH.
