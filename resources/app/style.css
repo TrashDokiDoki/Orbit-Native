@@ -485,7 +485,16 @@ body.light .home-dashboard { --player-surface: #f0eef3; --player-line: #201b2c21
 }
 #audio-level::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; border-radius: 50%; background: var(--accent); cursor: pointer; }
 #audio-value { width: 28px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-#audio-device { width: min(175px, 38%); min-width: 0; padding: 5px 7px; text-overflow: ellipsis; }
+#audio-device { width: min(175px, 38%); min-width: 0; text-overflow: ellipsis; }
+#audio-device, #media-source {
+  appearance: none;
+  padding: 5px 24px 5px 8px;
+  background:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%) right 12px center / 4px 4px no-repeat,
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%) right 8px center / 4px 4px no-repeat,
+    var(--input);
+}
+#audio-device:disabled { opacity: .6; }
 #eq-open { padding: 4px 7px; color: var(--accent); font-size: 17px; }
 #eq-dialog {
   width: min(490px, 94%);
@@ -597,7 +606,7 @@ body.light .home-dashboard { --player-surface: #f0eef3; --player-line: #201b2c21
 @media (prefers-reduced-motion: reduce) { #island { transition: none; } #pill-cover { animation: none; } }
 
 .media-card { position: relative; }
-#media-source { position: absolute; z-index: 2; top: 8px; left: 8px; max-width: 86px; padding: 3px 4px; font-size: 10px; opacity: .78; }
+#media-source { position: absolute; z-index: 2; top: 8px; left: 8px; max-width: 86px; padding-block: 3px; font-size: 10px; opacity: .78; }
 #media-source:hover, #media-source:focus { opacity: 1; }
 .home-dashboard { grid-template-rows: auto; }
 .home-dashboard:has(.dashboard-tools[hidden]) { grid-template-columns: minmax(0,1fr); grid-template-areas: "media" "audio" "launch"; }
