@@ -23,7 +23,18 @@ permissions:
 
 jobs:
   linux:
-    runs-on: ubuntu-24.04
+    name: linux-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x64
+            proxyArch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            proxyArch: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins libgtk-3-dev libwebkit2gtk-4.1-dev libpulse-dev xvfb dpkg-dev pulseaudio pulseaudio-utils python3-dbus python3-gi
@@ -37,8 +48,8 @@ jobs:
           pactl set-default-sink orbit_preview_test
       - name: Build a harmless proxy lifecycle fixture
         run: |
-          printf '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n' | cc -x c - -o "$RUNNER_TEMP/TgWsProxy_linux_amd64"
-          echo "ORBIT_TEST_PROXY=$RUNNER_TEMP/TgWsProxy_linux_amd64" >> "$GITHUB_ENV"
+          printf '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n' | cc -x c - -o "$RUNNER_TEMP/TgWsProxy_linux_${{ matrix.proxyArch }}"
+          echo "ORBIT_TEST_PROXY=$RUNNER_TEMP/TgWsProxy_linux_${{ matrix.proxyArch }}" >> "$GITHUB_ENV"
       - name: Test the app with PulseAudio and an MPRIS player
         run: |
           dbus-run-session -- bash -e -c '
@@ -58,17 +69,30 @@ jobs:
           test ! -e /usr/bin/OrbitShell
       - uses: actions/upload-artifact@v4
         with:
-          name: OrbitShell-linux-installer-x64
+          name: OrbitShell-linux-installer-${{ matrix.arch }}
           path: package/*.deb
           if-no-files-found: error
   windows:
-    runs-on: windows-2025
+    name: windows-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+            generatorArch: x64
+            qtArch: win64_msvc2022_64
+          - runner: windows-11-arm
+            arch: arm64
+            generatorArch: ARM64
+            qtArch: win64_msvc2022_arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
-          arch: win64_msvc2022_64
+          arch: ${{ matrix.qtArch }}
       - run: choco install nsis --yes --no-progress
       - name: Get signed Microsoft WebView2 bootstrapper
         shell: pwsh
@@ -79,7 +103,7 @@ jobs:
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation') {
             throw 'The Microsoft WebView2 bootstrapper signature could not be verified'
           }
-      - run: cmake -S . -B build -A x64 -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON "-DORBIT_WEBVIEW2_BOOTSTRAPPER=$((Resolve-Path WebView2Setup.exe).Path -replace '\\','/')"
+      - run: cmake -S . -B build -A ${{ matrix.generatorArch }} -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON "-DORBIT_WEBVIEW2_BOOTSTRAPPER=$((Resolve-Path WebView2Setup.exe).Path -replace '\\','/')"
       - run: cmake --build build --config Release --parallel --target OrbitShell
       - run: ctest --test-dir build --build-config Release -R '^shell-ui$' --output-on-failure
       - name: Report crash details
@@ -100,7 +124,7 @@ jobs:
       - name: Install, launch and remove the Windows package
         shell: pwsh
         run: |
-          $installer = Get-Item package/OrbitShell-*-windows-x64.exe
+          $installer = Get-Item package/OrbitShell-*-windows-${{ matrix.arch }}.exe
           $dest = Join-Path $env:RUNNER_TEMP 'OrbitShell-test'
           $setup = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$dest") -WindowStyle Hidden -Wait -PassThru
           if ($setup.ExitCode -ne 0) { throw "Installer exit code $($setup.ExitCode)" }
@@ -112,6 +136,6 @@ jobs:
           if ($remove.ExitCode -ne 0 -or (Test-Path $exe)) { throw 'Uninstall failed' }
       - uses: actions/upload-artifact@v4
         with:
-          name: OrbitShell-windows-installer-x64
-          path: package/OrbitShell-*-windows-x64.exe
+          name: OrbitShell-windows-installer-${{ matrix.arch }}
+          path: package/OrbitShell-*-windows-${{ matrix.arch }}.exe
           if-no-files-found: error
