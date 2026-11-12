@@ -75,6 +75,16 @@ jobs:
           import -window root captures/home-after-3s.png
           sleep 3
           import -window root captures/home-after-6s.png
+          capture_tab() {
+            local offset=$1 name=$2
+            xdotool mousemove --window "$island" "$offset" 39 click 1
+            sleep 1
+            import -window root "captures/$name.png"
+          }
+          capture_tab 344 weather
+          capture_tab 393 controls
+          capture_tab 441 network
+          capture_tab 196 shelf
           xdotool mousemove --window "$island" "$(( WIDTH - 39 ))" 39 click 1
           settings=$(wait_window '^Orbit Native — Settings$')
           sleep 1
