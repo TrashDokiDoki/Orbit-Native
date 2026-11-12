@@ -5,6 +5,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QDrag>
 #include <QBuffer>
 #include <QFileIconProvider>
 #include <QMimeData>
@@ -53,6 +54,7 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <commctrl.h>
+#include <wrl.h>
 #elif defined(Q_OS_LINUX)
 #include <gtk/gtk.h>
 #include <webkit2/webkit2.h>
@@ -265,6 +267,9 @@ private:
             channel->owner->receive(*channel, id, request);
         }, channel);
         webview_init(window, js.constData());
+#if defined(Q_OS_WIN) && defined(__ICoreWebView2File_INTERFACE_DEFINED__)
+        if (island) setupFileDrop(window, token, QUrl::fromEncoded(address));
+#endif
         if (testing_ && (island || page == "capture.html")) {
             webview_bind(window, "orbitShellTest", [](const char *, const char *args, void *data) {
                 auto *self = static_cast<OrbitShellController *>(data);
@@ -323,7 +328,7 @@ private:
                       track.album === 'Orbit album' && track.position === 27 && track.duration === 180 &&
                       track.cover?.startsWith('data:image/png;') && system.sources.includes(track.source);
                     if (mediaTest) {
-                      await orbit.native('media', {command:'playpause'});
+                      await orbit.native('media', {command:'play'});
                       for (let i=0; i<40 && system.media?.playing; i++)
                         await new Promise(resolve=>setTimeout(resolve,100));
                       mediaTest = system.media?.playing === false;
@@ -337,13 +342,18 @@ private:
                     proxyTest = before.proxyConfigured && !before.proxyRunning && started.proxyRunning && !stopped.proxyRunning;
                   }
                   const controls = await orbit.controls('status');
+                  const paths = await orbit.resolveDropPaths({files:[], getData:() => new URL('icon.png', location.href).href});
+                  const shelf = await orbit.shelfAdd(paths);
+                  const launcher = await orbit.dropLauncher(paths);
+                  const dropTest = paths.length === 1 && shelf[0]?.path === paths[0] && launcher.count === 1 &&
+                    (await orbit.fileIcon(paths[0]))?.startsWith?.('data:image/png;');
                   const desktopShape = typeof controls.networkUp === 'boolean' && typeof controls.dark === 'boolean';
-                  const valid = Boolean(eqSaved && soundShape && desktopShape && proxyTest && mediaTest && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                  const valid = Boolean(eqSaved && soundShape && desktopShape && proxyTest && mediaTest && dropTest && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
                     added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
                     document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
                   if (!valid) window.orbitShellTest(false, {
-                    eqSaved, soundShape, desktopShape, proxyTest, mediaTest,
+                    eqSaved, soundShape, desktopShape, proxyTest, mediaTest, dropTest,
                     media: system.media && {...system.media, cover: Boolean(system.media.cover)},
                     sources: system.sources
                   });
@@ -384,6 +394,19 @@ private:
         }
 #ifdef Q_OS_LINUX
         auto *browser = WEBKIT_WEB_VIEW(webview_get_native_handle(window, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
+        if (browser && island) {
+            g_signal_connect(browser, "drag-data-received", G_CALLBACK(+[](GtkWidget *, GdkDragContext *, gint, gint,
+                GtkSelectionData *selection, guint, guint, gpointer context) {
+                auto *self = static_cast<OrbitShellController *>(context);
+                auto **uris = gtk_selection_data_get_uris(selection);
+                if (!uris) return;
+                self->recentDrop_ = QJsonArray();
+                for (auto index = 0; uris[index] && index < 100; ++index)
+                    self->recentDrop_.append(QString::fromUtf8(uris[index]));
+                self->recentDropTime_ = QDateTime::currentMSecsSinceEpoch();
+                g_strfreev(uris);
+            }), this);
+        }
         if (browser && !gpuEnabled_) webkit_settings_set_hardware_acceleration_policy(
             webkit_web_view_get_settings(browser), WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
 #endif
@@ -401,6 +424,50 @@ private:
             return 0;
         }
         return DefSubclassProc(window, message, wParam, lParam);
+    }
+#endif
+
+#if defined(Q_OS_WIN) && defined(__ICoreWebView2File_INTERFACE_DEFINED__)
+    void setupFileDrop(webview_t window, const QString &token, const QUrl &page)
+    {
+        using Microsoft::WRL::ComPtr;
+        using Microsoft::WRL::Callback;
+        auto *controller = static_cast<ICoreWebView2Controller *>(
+            webview_get_native_handle(window, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
+        ComPtr<ICoreWebView2> browser;
+        if (!controller || FAILED(controller->get_CoreWebView2(&browser))) return;
+        EventRegistrationToken registration{};
+        browser->add_WebMessageReceived(Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+            [this, window, marker = token + ":drop", page](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *event) {
+                LPWSTR rawMessage = nullptr;
+                if (FAILED(event->TryGetWebMessageAsString(&rawMessage))) return S_OK;
+                const auto message = QString::fromWCharArray(rawMessage);
+                CoTaskMemFree(rawMessage);
+                if (message != marker) return S_OK;
+                LPWSTR rawSource = nullptr;
+                if (FAILED(event->get_Source(&rawSource))) return S_OK;
+                const auto source = QUrl(QString::fromWCharArray(rawSource));
+                CoTaskMemFree(rawSource);
+                if (source != page) return S_OK;
+                ComPtr<ICoreWebView2WebMessageReceivedEventArgs2> extended;
+                ComPtr<ICoreWebView2ObjectCollectionView> files;
+                UINT32 count = 0;
+                if (FAILED(event->QueryInterface(IID_PPV_ARGS(&extended))) ||
+                    FAILED(extended->get_AdditionalObjects(&files)) || !files ||
+                    FAILED(files->get_Count(&count))) return S_OK;
+                QJsonArray paths;
+                for (UINT32 index = 0; index < count && index < 100; ++index) {
+                    ComPtr<IUnknown> item;
+                    ComPtr<ICoreWebView2File> file;
+                    LPWSTR path = nullptr;
+                    if (FAILED(files->GetValueAtIndex(index, &item)) || !item ||
+                        FAILED(item.As(&file)) || FAILED(file->get_Path(&path))) continue;
+                    paths.append(QString::fromWCharArray(path));
+                    CoTaskMemFree(path);
+                }
+                emitTo(window, "native-drop-paths", paths);
+                return S_OK;
+            }).Get(), &registration);
     }
 #endif
 
@@ -843,9 +910,55 @@ private:
         return entries;
     }
 
-    QJsonValue shelfAdd()
+    QStringList localPaths(const QJsonArray &paths)
     {
-        const auto files = QFileDialog::getOpenFileNames(nullptr, QStringLiteral("Добавить на полку"));
+        QStringList files;
+        for (qsizetype index = 0; index < paths.size() && index < 100; ++index) {
+            const QFileInfo info(paths.at(index).toString());
+            if (info.isAbsolute() && info.exists()) files.append(info.absoluteFilePath());
+        }
+        files.removeDuplicates();
+        return files;
+    }
+
+    QJsonValue addLaunchers(const QJsonArray &paths)
+    {
+        const auto files = localPaths(paths);
+        if (files.isEmpty()) return error(QStringLiteral("Лаунчер принимает локальные файлы и папки"));
+        const auto previous = settings_.value("items");
+        auto items = previous.toArray();
+        QJsonArray additions;
+        for (const auto &path : files) {
+            bool known = false;
+            for (const auto &entry : std::as_const(items)) {
+                const auto target = entry.toObject().value("target").toString();
+#ifdef Q_OS_WIN
+                known |= target.compare(path, Qt::CaseInsensitive) == 0;
+#else
+                known |= target == path;
+#endif
+            }
+            if (known) continue;
+            const QFileInfo file(path);
+            const auto name = file.isDir() ? file.fileName() : file.completeBaseName();
+            const QJsonObject item{{"name", name.left(40)}, {"target", path}, {"symbol", QStringLiteral("↗")}, {"group", ""}};
+            additions.append(item);
+            items.append(item);
+        }
+        if (items.size() > 24) return error(QStringLiteral("В лаунчере может быть до 24 ярлыков"));
+        settings_["items"] = items;
+        if (!persist()) {
+            settings_["items"] = previous;
+            return error(QStringLiteral("Не удалось сохранить ярлыки"));
+        }
+        if (preferences_ && !additions.isEmpty()) emitTo(preferences_, "launcher-added", additions);
+        return QJsonObject{{"settings", settings_}, {"count", additions.size()}};
+    }
+
+    QJsonValue shelfAdd(const QJsonValue &paths)
+    {
+        const auto files = paths.isArray() ? localPaths(paths.toArray()) :
+            QFileDialog::getOpenFileNames(nullptr, QStringLiteral("Добавить на полку"));
         const auto previous = state_.value("shelf");
         auto entries = previous.toArray();
         for (const auto &file : files) {
@@ -879,12 +992,35 @@ private:
         return error(QStringLiteral("Файл не найден на полке"));
     }
 
+    bool dragShelfItem(const QString &id)
+    {
+        for (const auto &entry : state_.value("shelf").toArray()) {
+            const auto file = entry.toObject();
+            if (file.value("id").toString() != id) continue;
+            const QFileInfo info(file.value("path").toString());
+            if (!info.isAbsolute() || !info.exists()) return false;
+            auto *drag = new QDrag(this);
+            auto *data = new QMimeData;
+            data->setUrls({QUrl::fromLocalFile(info.absoluteFilePath())});
+            drag->setMimeData(data);
+            drag->setPixmap(QFileIconProvider().icon(info).pixmap(40, 40));
+            QTimer::singleShot(0, drag, [drag] {
+                drag->exec(Qt::CopyAction);
+                drag->deleteLater();
+            });
+            return true;
+        }
+        return false;
+    }
+
     QString fileIcon(const QString &path)
     {
         bool known = false;
         const auto shelf = state_.value("shelf").toArray();
         for (const auto &entry : shelf) known |= entry.toObject().value("path").toString() == path;
-        if (!known || !QFileInfo::exists(path)) return {};
+        for (const auto &entry : settings_.value("items").toArray())
+            known |= entry.toObject().value("target").toString() == path;
+        if (!known || !QFileInfo(path).isAbsolute() || !QFileInfo::exists(path)) return {};
         const auto icon = QFileIconProvider().icon(QFileInfo(path)).pixmap(48, 48);
         QBuffer png;
         if (!png.open(QIODevice::WriteOnly) || !icon.save(&png, "PNG")) return {};
@@ -1370,7 +1506,22 @@ private:
         } else if (command == "clip-action" && window == main_) {
             respond(clipAction(first.toString(), params.at(1).toString()));
         } else if (command == "shelf-add" && window == main_) {
-            respond(shelfAdd());
+            respond(shelfAdd(first));
+        } else if (command == "drop-launcher" && window == main_) {
+            respond(addLaunchers(first.toArray()));
+        } else if (command == "drop-paths" && window == main_) {
+            QJsonArray paths;
+            auto uris = first.toArray();
+#ifdef Q_OS_LINUX
+            if (uris.isEmpty() && QDateTime::currentMSecsSinceEpoch() - recentDropTime_ < 1000) uris = recentDrop_;
+            recentDrop_ = QJsonArray();
+            recentDropTime_ = 0;
+#endif
+            for (const auto &uri : uris) {
+                const auto url = QUrl(uri.toString());
+                if (url.isLocalFile() && url.host().isEmpty()) paths.append(url.toLocalFile());
+            }
+            respond(QJsonArray::fromStringList(localPaths(paths)));
         } else if (command == "shelf-action" && window == main_) {
             respond(shelfAction(first.toString(), params.at(1).toString()));
         } else if (command == "copy" && first.isString()) {
@@ -1457,6 +1608,8 @@ private:
             respond(exportBackup());
         } else if (command == "data-folder" && window == preferences_) {
             respond(launch(QFileInfo(store_).absolutePath()));
+        } else if (command == "drag-file" && window == main_) {
+            respond(dragShelfItem(first.toString()));
         } else if (command == "file-icon") {
             respond(fileIcon(first.toString()));
         } else if (command == "controls-view") {
@@ -1481,6 +1634,10 @@ private:
     QString notifiedUpdate_;
     QJsonObject settings_, state_, update_;
     QJsonObject lastSystem_;
+#ifdef Q_OS_LINUX
+    QJsonArray recentDrop_;
+    qint64 recentDropTime_ = 0;
+#endif
     Track currentTrack_;
     QJsonArray unavailableHotkeys_;
 #ifdef Q_OS_WIN

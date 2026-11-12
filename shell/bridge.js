@@ -20,6 +20,28 @@
   api.controlsView = visible => void call('controls-view', visible);
   api.dragFile = id => void call('drag-file', id);
   api.filePath = () => '';
+  let pendingDrop;
+  listeners.set('native-drop-paths', [paths => pendingDrop?.(paths)]);
+  api.resolveDropPaths = transfer => {
+    const files = Array.from(transfer.files).slice(0, 100);
+    const native = window.chrome?.webview;
+    if (native?.postMessageWithAdditionalObjects && files.length) {
+      return new Promise(resolve => {
+        const finish = paths => {
+          if (pendingDrop === finish) pendingDrop = undefined;
+          clearTimeout(timeout);
+          resolve(paths);
+        };
+        const timeout = setTimeout(() => finish([]), 700);
+        pendingDrop = finish;
+        try { native.postMessageWithAdditionalObjects(token + ':drop', files); }
+        catch { finish([]); }
+      });
+    }
+    const paths = transfer.getData('text/uri-list').split(/\r?\n/)
+      .filter(uri => uri.startsWith('file:')).slice(0, 100);
+    return call('drop-paths', paths).then(result => Array.isArray(result) ? result : []);
+  };
   if (location.pathname.endsWith('/capture.html')) {
     api.qr = async source => {
       try {
