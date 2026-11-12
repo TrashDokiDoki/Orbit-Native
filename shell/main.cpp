@@ -1,6 +1,7 @@
 #include "media.h"
 #include "audio.h"
 #include "desktop.h"
+#include "network_tools.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -16,6 +17,7 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImageReader>
+#include <QHostAddress>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QTemporaryFile>
@@ -152,6 +154,11 @@ private:
             }, this);
         }
         if (testing_ && island) {
+            const auto testProxy = qEnvironmentVariable("ORBIT_TEST_PROXY");
+            if (validProxyFile(testProxy)) {
+                settings_["proxyPath"] = testProxy;
+                webview_init(window, "window.orbitStrictProxyTest = true;");
+            }
             if (qEnvironmentVariableIsSet("ORBIT_TEST_AUDIO")) webview_init(window, "window.orbitStrictAudioTest = true;");
             webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
@@ -185,9 +192,16 @@ private:
                       typeof mute.muted === 'boolean' && restored.muted === !mute.muted;
                   }
 
+                  let proxyTest = true;
+                  if (window.orbitStrictProxyTest) {
+                    const before = await orbit.networkToolsStatus();
+                    const started = await orbit.networkToolsSet('tg', true);
+                    const stopped = await orbit.networkToolsSet('tg', false);
+                    proxyTest = before.proxyConfigured && !before.proxyRunning && started.proxyRunning && !stopped.proxyRunning;
+                  }
                   const controls = await orbit.controls('status');
                   const desktopShape = typeof controls.networkUp === 'boolean' && typeof controls.dark === 'boolean';
-                  const valid = Boolean(eqSaved && soundShape && desktopShape && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                  const valid = Boolean(eqSaved && soundShape && desktopShape && proxyTest && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
                     added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
                     document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
@@ -980,6 +994,43 @@ private:
         } else if (command == "web") {
             const auto url = QUrl(first.toString());
             respond(url.scheme() == "http" || url.scheme() == "https" ? launch(first.toString()) : QJsonValue(error("Unsupported URL")));
+        } else if (command == "network-tools-status" && window == main_) {
+            networkToolStatus(this, settings_.value("proxyPath").toString(), respond);
+        } else if (command == "network-tools-set" && window == main_ && params.at(1).isBool()) {
+            if (networkChanging_) { respond(error(QStringLiteral("Дождитесь завершения переключения"))); return; }
+            networkChanging_ = true;
+            setNetworkTool(this, first.toString(), params.at(1).toBool(), settings_.value("proxyPath").toString(),
+                [this, respond](QJsonObject status) { networkChanging_ = false; respond(status); });
+        } else if (command == "network-tools-pick-proxy" && window == main_) {
+            if (networkChanging_) { respond(error(QStringLiteral("Дождитесь завершения переключения"))); return; }
+            const auto path = QFileDialog::getOpenFileName(nullptr, QStringLiteral("Выберите TG WS Proxy"));
+            if (!path.isEmpty()) {
+                if (!validProxyFile(path)) { respond(error(QStringLiteral("Выберите исполняемый файл TG WS Proxy для этой ОС"))); return; }
+                const auto previous = settings_.value("proxyPath");
+                settings_["proxyPath"] = path;
+                if (!persist()) { settings_["proxyPath"] = previous; respond(error(QStringLiteral("Не удалось сохранить путь"))); return; }
+            }
+            networkToolStatus(this, settings_.value("proxyPath").toString(), respond);
+        } else if (command == "network-tools-link" && window == main_) {
+            if (first.toString() == "zapret") respond(launch(QStringLiteral("https://github.com/Flowseal/zapret-discord-youtube")));
+            else if (first.toString() == "tg") respond(launch(QStringLiteral("https://github.com/Flowseal/tg-ws-proxy/releases/latest")));
+            else respond(error(QStringLiteral("Неизвестный инструмент")));
+        } else if (command == "happ" && window == main_) {
+            if (first.toString() == "status") respond(happStatus());
+            else if (first.toString() == "toggle") respond(toggleHapp() ? QJsonValue(true) : QJsonValue(error(QStringLiteral("Не удалось открыть Happ"))));
+            else if (first.toString() == "ip" && !testing_) {
+                request(QUrl("https://ipinfo.io/json"), [respond](QJsonValue value) {
+                    const auto info = value.toObject();
+                    const auto ip = info.value("ip").toString();
+                    const auto country = info.value("country").toString();
+                    static const QRegularExpression countryCode(QStringLiteral("^[A-Z]{2}$"));
+                    if (QHostAddress(ip).isNull() || !countryCode.match(country).hasMatch()) {
+                        respond(error(QStringLiteral("Не удалось определить IP и страну")));
+                    } else {
+                        respond(QJsonObject{{"ip", ip}, {"country", country}});
+                    }
+                });
+            } else respond(error(QStringLiteral("Неизвестная команда Happ")));
         } else if (command == "controls" && window == main_) {
             desktopControl(this, first.toString(), respond);
         } else if (command == "system-link" && window == main_) {
@@ -1037,6 +1088,7 @@ private:
     webview_t main_ = nullptr, preferences_ = nullptr, editor_ = nullptr;
     QJsonObject snapshot_;
     bool capturePending_ = false;
+    bool networkChanging_ = false;
     std::vector<std::unique_ptr<Channel>> channels_;
 };
 }

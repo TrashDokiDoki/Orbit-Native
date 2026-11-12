@@ -35,6 +35,10 @@ jobs:
           pactl load-module module-null-sink sink_name=orbit_preview_test
           pactl load-module module-null-sink sink_name=orbit_preview_test_second
           pactl set-default-sink orbit_preview_test
+      - name: Build a harmless proxy lifecycle fixture
+        run: |
+          printf '#include <unistd.h>\nint main(void) { for (;;) pause(); }\n' | cc -x c - -o "$RUNNER_TEMP/TgWsProxy_linux_amd64"
+          echo "ORBIT_TEST_PROXY=$RUNNER_TEMP/TgWsProxy_linux_amd64" >> "$GITHUB_ENV"
       - run: ORBIT_TEST_AUDIO=1 xvfb-run -a ctest --test-dir build -R '^shell-ui$' --output-on-failure
       - run: cpack --config build/CPackConfig.cmake -B package
       - name: Install, launch and remove the Debian package
