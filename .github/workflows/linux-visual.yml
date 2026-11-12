@@ -65,9 +65,14 @@ jobs:
             sleep .25
           done
           (( WIDTH > 700 ))
+          xdotool windowfocus --sync "$island"
           xdotool mousemove --window "$island" 45 19
           sleep 1
-          import -window root captures/home-desktop.png
+          import -window root captures/home-after-1s.png
+          sleep 2
+          import -window root captures/home-after-3s.png
+          sleep 3
+          import -window root captures/home-after-6s.png
           xdotool mousemove --window "$island" "$(( WIDTH - 39 ))" 39 click 1
           settings=$(wait_window '^Orbit Native — Settings$')
           sleep 1
