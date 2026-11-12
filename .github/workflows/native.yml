@@ -1,0 +1,41 @@
+name: Native builds
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y qt6-base-dev qt6-qpa-plugins
+      - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --parallel
+      - run: ctest --test-dir build --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrbitNative-linux-x64
+          path: build/OrbitNative
+  windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+      - run: cmake -S . -B build -A x64
+      - run: cmake --build build --config Release --parallel
+      - run: ctest --test-dir build --build-config Release --output-on-failure
+      - run: |
+          New-Item -ItemType Directory -Path package | Out-Null
+          Copy-Item build/Release/OrbitNative.exe package/
+          windeployqt --release --no-translations package/OrbitNative.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrbitNative-windows-x64
+          path: package/

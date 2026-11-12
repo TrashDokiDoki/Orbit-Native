@@ -1,0 +1,26 @@
+cmake_minimum_required(VERSION 3.21)
+project(OrbitNative VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTORCC ON)
+
+find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Network)
+add_executable(OrbitNative WIN32
+    native/main.cpp native/media.cpp native/media.h native/art.qrc)
+target_link_libraries(OrbitNative PRIVATE Qt6::Widgets Qt6::Network)
+target_compile_definitions(OrbitNative PRIVATE ORBIT_VERSION="${PROJECT_VERSION}")
+if(WIN32)
+    target_link_libraries(OrbitNative PRIVATE user32)
+    if(MSVC)
+        target_compile_options(OrbitNative PRIVATE /utf-8)
+    endif()
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Qt6 6.4 REQUIRED COMPONENTS DBus)
+    target_link_libraries(OrbitNative PRIVATE Qt6::DBus)
+endif()
+
+enable_testing()
+add_test(NAME launch COMMAND OrbitNative --smoke-test)
+set_tests_properties(launch PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+install(TARGETS OrbitNative RUNTIME DESTINATION bin)

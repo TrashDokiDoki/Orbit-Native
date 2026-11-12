@@ -1,0 +1,6 @@
+<RCC>
+  <qresource prefix="/art">
+    <file alias="pug.png">../resources/app/pug.png</file>
+    <file alias="icon.png">../resources/app/icon.png</file>
+  </qresource>
+</RCC>

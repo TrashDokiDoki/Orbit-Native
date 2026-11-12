@@ -1,0 +1,471 @@
+#include "media.h"
+#include <QApplication>
+#include <QCloseEvent>
+#include <QDateTime>
+#include <QDesktopServices>
+#include <QDragEnterEvent>
+#include <QFileDialog>
+#include <QGuiApplication>
+#include <QHBoxLayout>
+#include <QIcon>
+#include <QInputDialog>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QLabel>
+#include <QListWidget>
+#include <QLineEdit>
+#include <QMenu>
+#include <QMimeData>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QPushButton>
+#include <QScreen>
+#include <QSettings>
+#include <QSystemTrayIcon>
+#include <QTabWidget>
+#include <QTextEdit>
+#include <QTimer>
+#include <QUrlQuery>
+#include <QVBoxLayout>
+#include <functional>
+
+class Island final : public QWidget {
+public:
+    explicit Island(bool testing)
+        : QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint)
+    {
+        setWindowTitle("Orbit Native");
+        setWindowIcon(QIcon(":/art/icon.png"));
+        setAttribute(Qt::WA_TranslucentBackground);
+        setAttribute(Qt::WA_ShowWithoutActivating);
+        setAcceptDrops(true);
+
+        root_ = new QVBoxLayout(this);
+        root_->setContentsMargins(0, 0, 0, 0);
+        card_ = new QWidget(this);
+        card_->setObjectName("island");
+        root_->addWidget(card_);
+        auto *cardLayout = new QVBoxLayout(card_);
+        cardLayout->setContentsMargins(9, 4, 9, 4);
+        header_ = new QWidget(card_);
+        auto *headerLayout = new QHBoxLayout(header_);
+        headerLayout->setContentsMargins(5, 0, 5, 0);
+        cardLayout->addWidget(header_);
+        mascot_ = new QLabel(header_);
+        pet_ = QPixmap(":/art/pug.png").scaled(29, 29, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        mascot_->setPixmap(pet_);
+        headerLayout->addWidget(mascot_);
+        clock_ = new QLabel(header_);
+        headerLayout->addWidget(clock_);
+        temperature_ = new QLabel("—°", header_);
+        headerLayout->addWidget(temperature_);
+        counter_ = new QLabel(header_);
+        counter_->hide();
+        headerLayout->addWidget(counter_);
+        equalizer_ = new QLabel(QStringLiteral("▮▮▮"), header_);
+        equalizer_->hide();
+        headerLayout->addWidget(equalizer_);
+        headerLayout->addStretch();
+        panelButton_ = button(headerLayout, QStringLiteral("⌄"), [this] { expand(!open_); });
+        panelButton_->setAccessibleName(tr("Раскрыть или свернуть Orbit"));
+
+        tabs_ = new QTabWidget(card_);
+        cardLayout->addWidget(tabs_);
+        createPlayer();
+        createWeather();
+        createShelf();
+        createNotes();
+        createTimer();
+
+        hover_.setSingleShot(true);
+        hover_.setInterval(150);
+        connect(&hover_, &QTimer::timeout, this, [this] { expand(true); });
+        leave_.setSingleShot(true);
+        leave_.setInterval(420);
+        connect(&leave_, &QTimer::timeout, this, [this] { if (!underMouse()) expand(false); });
+        clockTimer_.setSingleShot(true);
+        connect(&clockTimer_, &QTimer::timeout, this, &Island::updateClock);
+        alarm_.setSingleShot(true);
+        alarm_.setTimerType(Qt::PreciseTimer);
+        connect(&alarm_, &QTimer::timeout, this, &Island::finishTimer);
+        weatherTimer_.setInterval(15 * 60 * 1000);
+        weatherTimer_.setTimerType(Qt::VeryCoarseTimer);
+        connect(&weatherTimer_, &QTimer::timeout, this, &Island::updateWeather);
+        media_.changed = [this](const Track &track) { showTrack(track); };
+        updateClock();
+        expand(false);
+        if (!testing) {
+            createTray();
+            updateWeather();
+            weatherTimer_.start();
+            media_.refresh();
+        }
+    }
+
+    bool smokeTest()
+    {
+        const bool compact = width() == 224 && tabs_->isHidden();
+        expand(true);
+        const bool expanded = width() > 224 && !tabs_->isHidden() && tabs_->count() == 5;
+        expand(false);
+        return compact && expanded && width() == 224;
+    }
+
+protected:
+    void enterEvent(QEnterEvent *event) override
+    {
+        leave_.stop();
+        if (!open_ && hoverEnabled_) hover_.start();
+        QWidget::enterEvent(event);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        hover_.stop();
+        if (open_) leave_.start();
+        QWidget::leaveEvent(event);
+    }
+
+    void dragEnterEvent(QDragEnterEvent *event) override
+    {
+        if (event->mimeData()->hasUrls()) event->acceptProposedAction();
+    }
+
+    void dropEvent(QDropEvent *event) override
+    {
+        for (const auto &url : event->mimeData()->urls()) {
+            if (url.isLocalFile()) addFile(url.toLocalFile());
+        }
+        event->acceptProposedAction();
+        expand(true);
+        tabs_->setCurrentWidget(shelf_->parentWidget());
+    }
+
+private:
+    QPushButton *button(QBoxLayout *layout, const QString &text, std::function<void()> action)
+    {
+        auto *widget = new QPushButton(text);
+        connect(widget, &QPushButton::clicked, this, [action] { action(); });
+        layout->addWidget(widget);
+        return widget;
+    }
+
+    QVBoxLayout *page(const QString &title)
+    {
+        auto *widget = new QWidget(tabs_);
+        tabs_->addTab(widget, title);
+        auto *layout = new QVBoxLayout(widget);
+        layout->setContentsMargins(14, 14, 14, 14);
+        layout->setSpacing(9);
+        return layout;
+    }
+
+    void createPlayer()
+    {
+        auto *layout = page(tr("Главная"));
+        auto *track = new QHBoxLayout;
+        cover_ = new QLabel;
+        cover_->setFixedSize(96, 96);
+        cover_->setAlignment(Qt::AlignCenter);
+        cover_->setPixmap(pet_);
+        track->addWidget(cover_);
+        auto *info = new QVBoxLayout;
+        title_ = new QLabel(tr("Музыка рядом"));
+        title_->setObjectName("title");
+        title_->setWordWrap(true);
+#ifdef Q_OS_WIN
+        artist_ = new QLabel(tr("Управление системными медиаклавишами"));
+#else
+        artist_ = new QLabel(tr("Откройте плеер с поддержкой MPRIS"));
+#endif
+        artist_->setWordWrap(true);
+        info->addWidget(title_);
+        info->addWidget(artist_);
+        auto *transport = new QHBoxLayout;
+        button(transport, QStringLiteral("⏮"), [this] { media_.send(Media::Previous); })->setAccessibleName(tr("Предыдущий трек"));
+        button(transport, QStringLiteral("⏯"), [this] { media_.send(Media::PlayPause); })->setAccessibleName(tr("Пауза или воспроизведение"));
+        button(transport, QStringLiteral("⏭"), [this] { media_.send(Media::Next); })->setAccessibleName(tr("Следующий трек"));
+        transport->addStretch();
+        info->addLayout(transport);
+        track->addLayout(info, 1);
+        layout->addLayout(track);
+        auto *launcher = new QHBoxLayout;
+        button(launcher, "Spotify", [] { QDesktopServices::openUrl(QUrl("https://open.spotify.com/")); });
+        button(launcher, "ChatGPT", [] { QDesktopServices::openUrl(QUrl("https://chatgpt.com/")); });
+        button(launcher, "Codex", [] { QDesktopServices::openUrl(QUrl("https://chatgpt.com/codex")); });
+        layout->addLayout(launcher);
+        layout->addStretch();
+    }
+
+    void showTrack(const Track &track)
+    {
+        title_->setText(track.title.isEmpty() ? tr("Музыка рядом") : track.title);
+        artist_->setText(track.artist.isEmpty() ? tr("Системный плеер") : track.artist);
+        equalizer_->setVisible(track.playing);
+        if (track.cover == coverUrl_) return;
+        coverUrl_ = track.cover;
+        if (coverUrl_.isLocalFile()) {
+            const QPixmap image(coverUrl_.toLocalFile());
+            cover_->setPixmap(image.isNull() ? pet_ : image.scaled(96, 96, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        } else {
+            cover_->setPixmap(pet_);
+        }
+    }
+
+    void createWeather()
+    {
+        auto *layout = page(tr("Погода"));
+        city_ = settings_.value("weather/city", QStringLiteral("Москва")).toString();
+        weather_ = new QLabel(tr("Загрузка прогноза…"));
+        weather_->setWordWrap(true);
+        weather_->setTextFormat(Qt::PlainText);
+        weather_->setObjectName("title");
+        layout->addWidget(weather_);
+        auto *buttons = new QHBoxLayout;
+        button(buttons, tr("Выбрать город"), [this] {
+            bool ok = false;
+            const QString city = QInputDialog::getText(this, tr("Погода"), tr("Город"), QLineEdit::Normal, city_, &ok).trimmed();
+            if (ok && !city.isEmpty()) {
+                city_ = city.left(80);
+                settings_.setValue("weather/city", city_);
+                updateWeather();
+            }
+        });
+        button(buttons, tr("Обновить"), [this] { updateWeather(); });
+        buttons->addStretch();
+        layout->addLayout(buttons);
+        layout->addWidget(new QLabel(tr("Данные Open-Meteo")));
+        layout->addStretch();
+    }
+
+    void json(const QUrl &url, std::function<void(QJsonObject)> done)
+    {
+        if (!network_) network_ = new QNetworkAccessManager(this);
+        QNetworkRequest request(url);
+        request.setTransferTimeout(10000);
+        auto *reply = network_->get(request);
+        connect(reply, &QNetworkReply::finished, this, [reply, done] {
+            const auto result = reply->error() == QNetworkReply::NoError
+                ? QJsonDocument::fromJson(reply->readAll()).object() : QJsonObject{};
+            reply->deleteLater();
+            done(result);
+        });
+    }
+
+    void updateWeather()
+    {
+        const auto request = ++weatherRequest_;
+        QUrl geo("https://geocoding-api.open-meteo.com/v1/search");
+        QUrlQuery placeQuery;
+        placeQuery.setQueryItems({{"name", city_}, {"count", "1"}, {"language", "ru"}});
+        geo.setQuery(placeQuery);
+        json(geo, [this, request](const QJsonObject &response) {
+            if (request != weatherRequest_) return;
+            const auto places = response.value("results").toArray();
+            if (places.isEmpty()) { weather_->setText(tr("Не удалось получить прогноз для %1").arg(city_)); return; }
+            const auto place = places.at(0).toObject();
+            QUrl forecast("https://api.open-meteo.com/v1/forecast");
+            QUrlQuery forecastQuery;
+            forecastQuery.setQueryItems({{"latitude", QString::number(place.value("latitude").toDouble())},
+                {"longitude", QString::number(place.value("longitude").toDouble())},
+                {"current", "temperature_2m,apparent_temperature,weather_code"},
+                {"timezone", "auto"}});
+            forecast.setQuery(forecastQuery);
+            json(forecast, [this, request, place](const QJsonObject &data) {
+                if (request != weatherRequest_) return;
+                const auto current = data.value("current").toObject();
+                if (!current.value("temperature_2m").isDouble()) { weather_->setText(tr("Прогноз недоступен")); return; }
+                const auto degrees = QString::number(qRound(current.value("temperature_2m").toDouble())) + QStringLiteral("°");
+                const int code = current.value("weather_code").toInt();
+                const QString symbol = code <= 1 ? QStringLiteral("☀") : code <= 3 ? QStringLiteral("☁") : QStringLiteral("☂");
+                temperature_->setText(symbol + " " + degrees);
+                weather_->setText(place.value("name").toString() + "\n" + symbol + " " + degrees +
+                    tr(" · Ощущается как %1°").arg(qRound(current.value("apparent_temperature").toDouble())));
+            });
+        });
+    }
+
+    void createShelf()
+    {
+        auto *layout = page(tr("Полка"));
+        shelf_ = new QListWidget;
+        shelf_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+        layout->addWidget(shelf_);
+        for (const auto &file : settings_.value("shelf/files").toStringList()) addFile(file, false);
+        connect(shelf_, &QListWidget::itemDoubleClicked, this, [](QListWidgetItem *item) {
+            QDesktopServices::openUrl(QUrl::fromLocalFile(item->data(Qt::UserRole).toString()));
+        });
+        auto *buttons = new QHBoxLayout;
+        button(buttons, tr("Добавить файлы"), [this] {
+            for (const auto &file : QFileDialog::getOpenFileNames(this, tr("Добавить на полку"))) addFile(file);
+        });
+        button(buttons, tr("Убрать с полки"), [this] {
+            const auto selected = shelf_->selectedItems();
+            for (auto *item : selected) delete item;
+            saveShelf();
+        });
+        layout->addLayout(buttons);
+    }
+
+    void addFile(const QString &file, bool save = true)
+    {
+        for (int i = 0; i < shelf_->count(); ++i) if (shelf_->item(i)->data(Qt::UserRole).toString() == file) return;
+        auto *item = new QListWidgetItem(QUrl::fromLocalFile(file).fileName(), shelf_);
+        item->setData(Qt::UserRole, file);
+        item->setToolTip(file);
+        if (save) saveShelf();
+    }
+
+    void saveShelf()
+    {
+        QStringList files;
+        for (int i = 0; i < shelf_->count(); ++i) files.append(shelf_->item(i)->data(Qt::UserRole).toString());
+        settings_.setValue("shelf/files", files);
+    }
+
+    void createNotes()
+    {
+        auto *layout = page(tr("Заметки"));
+        auto *notes = new QTextEdit;
+        notes->setAcceptRichText(false);
+        notes->setPlaceholderText(tr("Заметка сохраняется автоматически"));
+        notes->setPlainText(settings_.value("notes/text").toString());
+        layout->addWidget(notes);
+        connect(notes, &QTextEdit::textChanged, this, [this, notes] { settings_.setValue("notes/text", notes->toPlainText()); });
+    }
+
+    void createTimer()
+    {
+        auto *layout = page(tr("Таймер"));
+        timerLabel_ = new QLabel(tr("Таймер не запущен"));
+        timerLabel_->setObjectName("title");
+        layout->addWidget(timerLabel_);
+        auto *buttons = new QHBoxLayout;
+        for (const auto minutes : {5, 15, 25}) {
+            button(buttons, tr("%1 мин").arg(minutes), [this, minutes] { startTimer(minutes); });
+        }
+        button(buttons, tr("Своё время"), [this] {
+            bool ok = false;
+            const auto minutes = QInputDialog::getInt(this, tr("Таймер"), tr("Минуты"), 10, 1, 1440, 1, &ok);
+            if (ok) startTimer(minutes);
+        });
+        button(buttons, tr("Стоп"), [this] { alarm_.stop(); deadline_ = 0; updateClock(); });
+        layout->addLayout(buttons);
+        layout->addStretch();
+    }
+
+    void startTimer(int minutes)
+    {
+        const auto duration = minutes * 60000;
+        deadline_ = QDateTime::currentMSecsSinceEpoch() + duration;
+        alarm_.start(duration);
+        updateClock();
+    }
+
+    void finishTimer()
+    {
+        deadline_ = 0;
+        updateClock();
+        if (tray_ && QSystemTrayIcon::supportsMessages()) tray_->showMessage("Orbit Native", tr("Время вышло"));
+        expand(true);
+        tabs_->setCurrentIndex(tabs_->count() - 1);
+        timerLabel_->setText(tr("Таймер завершён"));
+    }
+
+    void updateClock()
+    {
+        const auto now = QDateTime::currentDateTime();
+        clock_->setText(now.time().toString("HH:mm"));
+        counter_->setVisible(deadline_ > 0);
+        if (deadline_ > 0) {
+            const auto seconds = qMax<qint64>(0, (deadline_ - now.toMSecsSinceEpoch() + 999) / 1000);
+            const auto label = QString("%1:%2").arg(seconds / 60).arg(seconds % 60, 2, 10, QLatin1Char('0'));
+            counter_->setText(label);
+            timerLabel_->setText(label);
+        } else {
+            timerLabel_->setText(tr("Таймер не запущен"));
+        }
+        const int period = deadline_ > 0 ? 1000 : 60000;
+        clockTimer_.start(period - int(now.toMSecsSinceEpoch() % period) + 25);
+    }
+
+    void createTray()
+    {
+        if (!QSystemTrayIcon::isSystemTrayAvailable()) return;
+        tray_ = new QSystemTrayIcon(windowIcon(), this);
+        tray_->setToolTip("Orbit Native");
+        auto *menu = new QMenu(this);
+        menu->addAction(tr("Открыть Orbit"), this, [this] { expand(true); });
+        auto *hover = menu->addAction(tr("Раскрывать при наведении"));
+        hover->setCheckable(true);
+        hover->setChecked(hoverEnabled_);
+        connect(hover, &QAction::toggled, this, [this](bool value) {
+            hoverEnabled_ = value;
+            settings_.setValue("island/hover", value);
+        });
+        menu->addAction(tr("Выход"), qApp, &QApplication::quit);
+        tray_->setContextMenu(menu);
+        tray_->show();
+    }
+
+    void expand(bool open)
+    {
+        open_ = open;
+        hover_.stop();
+        leave_.stop();
+        tabs_->setVisible(open);
+        panelButton_->setText(open ? QStringLiteral("⌃") : QStringLiteral("⌄"));
+        const auto *screen = this->screen();
+        const auto area = screen ? screen->availableGeometry() : QRect(0, 0, 1280, 720);
+        setFixedSize(open ? qMin(760, area.width() - 20) : 224,
+                     open ? qMin(386, area.height() - 30) : 44);
+        move(area.center().x() - width() / 2, area.top() + 10);
+    }
+
+    QSettings settings_;
+    Media media_{this};
+    QTimer hover_, leave_, clockTimer_, alarm_, weatherTimer_;
+    QNetworkAccessManager *network_ = nullptr;
+    QSystemTrayIcon *tray_ = nullptr;
+    QWidget *card_ = nullptr, *header_ = nullptr;
+    QVBoxLayout *root_ = nullptr;
+    QLabel *mascot_ = nullptr, *clock_ = nullptr, *temperature_ = nullptr, *counter_ = nullptr, *equalizer_ = nullptr;
+    QLabel *title_ = nullptr, *artist_ = nullptr, *cover_ = nullptr, *weather_ = nullptr, *timerLabel_ = nullptr;
+    QPushButton *panelButton_ = nullptr;
+    QTabWidget *tabs_ = nullptr;
+    QListWidget *shelf_ = nullptr;
+    QPixmap pet_;
+    QUrl coverUrl_;
+    QString city_;
+    int weatherRequest_ = 0;
+    qint64 deadline_ = 0;
+    bool open_ = false;
+    bool hoverEnabled_ = settings_.value("island/hover", true).toBool();
+};
+
+int main(int argc, char *argv[])
+{
+    QApplication app(argc, argv);
+    app.setOrganizationName("OrbitNative");
+    app.setApplicationName("Orbit Native");
+    app.setApplicationVersion(ORBIT_VERSION);
+    app.setStyle("Fusion");
+    app.setStyleSheet(R"(
+        QWidget { color: #eeecf6; font-size: 13px; }
+        QWidget#island { background: #101014; border: 1px solid #25242e; border-radius: 19px; }
+        QLabel#title { font-size: 21px; font-weight: 600; }
+        QPushButton { background: #23222a; border: 0; border-radius: 8px; padding: 6px 10px; }
+        QPushButton:hover, QTabBar::tab:selected { background: #383345; }
+        QPushButton:focus { border: 1px solid #bba8ff; }
+        QTabWidget::pane { background: #18171e; border: 1px solid #292832; border-radius: 12px; }
+        QTabBar::tab { background: #201f26; padding: 7px 12px; margin-right: 3px; border-radius: 6px; }
+        QListWidget, QTextEdit, QLineEdit, QSpinBox { background: #201f26; border: 1px solid #302d39; border-radius: 7px; padding: 5px; }
+        QDialog, QMenu { background: #17161d; }
+    )");
+    const bool testing = app.arguments().contains("--smoke-test");
+    Island island(testing);
+    if (testing) return island.smokeTest() ? 0 : 1;
+    island.show();
+    return app.exec();
+}
