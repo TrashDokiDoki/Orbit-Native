@@ -1,5 +1,6 @@
 #include "media.h"
 #include "audio.h"
+#include "desktop.h"
 
 #include <QApplication>
 #include <QClipboard>
@@ -184,7 +185,9 @@ private:
                       typeof mute.muted === 'boolean' && restored.muted === !mute.muted;
                   }
 
-                  const valid = Boolean(eqSaved && soundShape && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                  const controls = await orbit.controls('status');
+                  const desktopShape = typeof controls.networkUp === 'boolean' && typeof controls.dark === 'boolean';
+                  const valid = Boolean(eqSaved && soundShape && desktopShape && initial.settings && stored.state.notes[0]?.text === notes[0].text &&
                     added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
                     document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
@@ -364,7 +367,7 @@ private:
         for (qsizetype i = 0; i < gains.size(); ++i) {
             const auto gain = gains.at(i).toInt(100);
             if (gain < -12 || gain > 12) return error(QStringLiteral("Усиление должно быть целым числом от −12 до 12 дБ"));
-            peak = std::max(peak, gain);
+            peak = (std::max)(peak, gain);
             curve.append(QStringLiteral("%1 %2").arg(frequencies.at(i)).arg(gain));
         }
         if (!testing_) {
@@ -977,6 +980,13 @@ private:
         } else if (command == "web") {
             const auto url = QUrl(first.toString());
             respond(url.scheme() == "http" || url.scheme() == "https" ? launch(first.toString()) : QJsonValue(error("Unsupported URL")));
+        } else if (command == "controls" && window == main_) {
+            desktopControl(this, first.toString(), respond);
+        } else if (command == "system-link" && window == main_) {
+            respond(openSystemSettings(first.toString()));
+        } else if (command == "native" && first.toString() == "dictation" && window == main_) {
+            resize(false);
+            respond(startDictation());
         } else if (command == "audio" && window == main_) {
             audio_.request(first.toString(), params.at(1), respond);
         } else if (command == "eq-profile" && window == main_) {
