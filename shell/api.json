@@ -35,7 +35,6 @@
     "color": "color",
     "qr": "qr",
     "recordState": "record-state",
-    "recordSave": "record-save",
     "weather": "weather",
     "dataExport": "data-export",
     "dataFolder": "data-folder",

@@ -151,3 +151,90 @@ jobs:
           name: OrbitShell-windows-installer-${{ matrix.arch }}
           path: package/OrbitShell-*-windows-${{ matrix.arch }}.exe
           if-no-files-found: error
+
+      - name: Stage the native Windows payload for the combined installer
+        shell: pwsh
+        run: cmake --install build --config Release --prefix windows-payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrbitShell-windows-payload-${{ matrix.arch }}
+          path: windows-payload/
+          if-no-files-found: error
+
+  windows-universal:
+    name: windows-universal
+    needs: windows
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: OrbitShell-windows-payload-x64
+          path: payload/x64
+      - uses: actions/download-artifact@v4
+        with:
+          name: OrbitShell-windows-payload-arm64
+          path: payload/arm64
+      - run: choco install nsis --yes --no-progress
+      - name: Build one per-user Windows installer
+        shell: pwsh
+        run: |
+          $workspace = (Get-Location).Path
+          $bootstrap = Join-Path $workspace 'WebView2Setup.exe'
+          curl.exe --fail --location --silent --show-error --output $bootstrap 'https://go.microsoft.com/fwlink/p/?LinkId=2124703'
+          if ($LASTEXITCODE -ne 0) { throw 'WebView2 download failed' }
+          $signature = Get-AuthenticodeSignature -LiteralPath $bootstrap
+          if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation') {
+            throw 'The Microsoft WebView2 bootstrapper signature could not be verified'
+          }
+          $pattern = '(?m)^project[(]OrbitNative VERSION ([0-9.]+)'
+          $version = [regex]::Match((Get-Content CMakeLists.txt -Raw), $pattern).Groups[1].Value
+          if (!$version) { throw 'Could not determine the Orbit version' }
+          $compiler = Get-Command makensis.exe -ErrorAction SilentlyContinue
+          $makensis = if ($compiler) { $compiler.Source } else { Join-Path ${env:ProgramFiles(x86)} 'NSIS/makensis.exe' }
+          New-Item -ItemType Directory -Path output -Force | Out-Null
+          & $makensis /V2 /INPUTCHARSET UTF8 "/DORBIT_VERSION=$version" "/DORBIT_BOOTSTRAPPER=$bootstrap" `
+            "/DORBIT_X64=$workspace/payload/x64" "/DORBIT_ARM64=$workspace/payload/arm64" `
+            "/DORBIT_OUTPUT=$workspace/output/OrbitNative-$version-Windows.exe" packaging/orbit-native-windows.nsi
+          if ($LASTEXITCODE -ne 0) { throw 'NSIS could not build the combined installer' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrbitShell-windows-installer-universal
+          path: output/*.exe
+          if-no-files-found: error
+
+  windows-universal-smoke:
+    name: windows-universal-test-${{ matrix.arch }}
+    needs: windows-universal
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+            machine: 34404
+          - runner: windows-11-arm
+            arch: arm64
+            machine: 43620
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: OrbitShell-windows-installer-universal
+      - name: Verify installation, native architecture, launch and removal
+        shell: pwsh
+        run: |
+          $installer = Get-Item OrbitNative-*-Windows.exe
+          $dest = Join-Path $env:RUNNER_TEMP 'OrbitUniversalSmoke'
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$dest") -WindowStyle Hidden -Wait -PassThru
+          if ($setup.ExitCode -ne 0) { throw "Installer exit code $($setup.ExitCode)" }
+          $exe = Join-Path $dest 'orbit-app/bin/OrbitShell.exe'
+          $pe = [IO.File]::ReadAllBytes($exe)
+          $header = [BitConverter]::ToInt32($pe, 0x3c)
+          $machine = [BitConverter]::ToUInt16($pe, $header + 4)
+          if ($machine -ne ${{ matrix.machine }}) { throw "Unexpected installed PE architecture $machine" }
+          $test = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru
+          if (!$test.WaitForExit(30000)) { Stop-Process -Id $test.Id; throw 'Smoke test timed out' }
+          if ($test.ExitCode -ne 0) { throw "Smoke test exit code $($test.ExitCode)" }
+          $remove = Start-Process -FilePath (Join-Path $dest 'Uninstall.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
+          if ($remove.ExitCode -ne 0 -or (Test-Path $exe)) { throw 'Uninstall failed' }

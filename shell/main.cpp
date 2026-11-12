@@ -9,6 +9,7 @@
 #include <QBuffer>
 #include <QFileIconProvider>
 #include <QMimeData>
+#include <QMimeDatabase>
 #include <QPixmap>
 #include <QDateTime>
 #include <QDebug>
@@ -62,6 +63,7 @@
 #include "x11_input.h"
 #include "portal_screenshot.h"
 #include <gtk/gtk.h>
+#include <gio/gdesktopappinfo.h>
 #include <webkit2/webkit2.h>
 #endif
 
@@ -1279,7 +1281,16 @@ private:
         const auto icon = QImage::fromHICON(file.hIcon);
         DestroyIcon(file.hIcon);
 #else
-        const auto icon = QFileIconProvider().icon(QFileInfo(path)).pixmap(48, 48);
+        QPixmap icon;
+        if (path.endsWith(".desktop")) {
+            QSettings desktop(path, QSettings::IniFormat);
+            const auto name = desktop.value("Desktop Entry/Icon").toString();
+            if (!name.isEmpty()) {
+                const auto source = QFileInfo(name).isAbsolute() ? QIcon(name) : QIcon::fromTheme(name);
+                icon = source.pixmap(48, 48);
+            }
+        }
+        if (icon.isNull()) icon = QFileIconProvider().icon(QFileInfo(path)).pixmap(48, 48);
 #endif
         QBuffer png;
         if (!png.open(QIODevice::WriteOnly) || !icon.save(&png, "PNG")) return {};
@@ -1736,9 +1747,41 @@ private:
         const auto url = QUrl(target);
         if (url.scheme() == "https" || url.scheme() == "http" || url.scheme() == "spotify" || url.scheme() == "steam") {
             if (QDesktopServices::openUrl(url)) return true;
-        } else if (QFileInfo(target).isAbsolute() && QFileInfo(target).exists() &&
-                   QDesktopServices::openUrl(QUrl::fromLocalFile(target))) return true;
+        } else {
+            const QFileInfo file(target);
+            if (!file.isAbsolute() || !file.exists()) return error(QStringLiteral("Ярлык не найден"));
+#ifdef Q_OS_LINUX
+            if (file.isFile() && file.suffix() == "desktop") {
+                auto *desktop = g_desktop_app_info_new_from_filename(QFile::encodeName(file.absoluteFilePath()).constData());
+                if (!desktop) return error(QStringLiteral("Не удалось прочитать ярлык приложения"));
+                auto *display = gdk_display_get_default();
+                auto *context = display ? gdk_display_get_app_launch_context(display) : nullptr;
+                const bool launched = g_app_info_launch(G_APP_INFO(desktop), nullptr,
+                    context ? G_APP_LAUNCH_CONTEXT(context) : nullptr, nullptr);
+                if (context) g_object_unref(context);
+                g_object_unref(desktop);
+                if (launched) return true;
+                return error(QStringLiteral("Не удалось запустить приложение из ярлыка"));
+            }
+            if (file.isFile() && file.isExecutable()) {
+                const auto type = QMimeDatabase().mimeTypeForFile(file);
+                if (type.inherits("application/x-executable") || type.inherits("application/x-pie-executable") ||
+                    file.suffix().compare("AppImage", Qt::CaseInsensitive) == 0)
+                    return QProcess::startDetached(file.absoluteFilePath(), {}, file.absolutePath())
+                        ? QJsonValue(true) : QJsonValue(error(QStringLiteral("Не удалось запустить приложение")));
+            }
+#endif
+            if (QDesktopServices::openUrl(QUrl::fromLocalFile(file.absoluteFilePath()))) return true;
+        }
         return error(QStringLiteral("Не удалось открыть ярлык"));
+    }
+
+    void showSettingsSection()
+    {
+        if (!preferences_ || !preferencesReady_) return;
+        emitTo(preferences_, "settings-section", QJsonObject{
+            {"section", settingsSection_}, {"add", std::exchange(settingsAdd_, false)}
+        });
     }
 
     struct Channel { OrbitShellController *owner; webview_t window; QString token; };
@@ -1764,7 +1807,10 @@ private:
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
                     {"systemLabel", system}, {"platform", system == "Windows" ? "win32" : "linux"},
                     {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_}});
-            if (window == preferences_) emitTo(preferences_, "settings-section", QJsonObject{{"section", settingsSection_}});
+            if (window == preferences_) {
+                preferencesReady_ = true;
+                showSettingsSection();
+            }
             if (window == main_ && !lastSystem_.isEmpty()) emitTo(main_, "system", lastSystem_);
         } else if (command == "expand" && window == main_) {
             resize(first.toBool()); respond(true);
@@ -1776,6 +1822,7 @@ private:
             shape(first.toObject()); respond(true);
         } else if (command == "open-settings" && window == main_) {
             settingsSection_ = first.toString(QStringLiteral("general"));
+            settingsAdd_ = params.at(1).toBool();
             if (!preferences_) {
                 preferences_ = webview_create(false, nullptr);
                 if (preferences_ && !open(preferences_, "settings.html", false)) { webview_destroy(preferences_); preferences_ = nullptr; }
@@ -1785,7 +1832,7 @@ private:
 #elif defined(Q_OS_LINUX)
                 gtk_window_present(GTK_WINDOW(webview_get_window(preferences_)));
 #endif
-                emitTo(preferences_, "settings-section", QJsonObject{{"section", settingsSection_}});
+                showSettingsSection();
             }
             respond(preferences_ ? QJsonValue(true) : QJsonValue(error(QStringLiteral("Не удалось открыть настройки"))));
         } else if (command == "save" && window == preferences_) {
@@ -1970,6 +2017,8 @@ private:
 
     QString directory_, store_;
     QString settingsSection_ = QStringLiteral("general");
+    bool settingsAdd_ = false;
+    bool preferencesReady_ = false;
     bool testing_ = false, passed_ = false;
     Media media_;
     Audio audio_;
