@@ -511,6 +511,7 @@ private:
             }, this);
         }
         if (testing_ && island) {
+            settings_["collapseOnLeave"] = false;
             webview_bind(window, "orbitShellTrace", [](const char *id, const char *args, void *context) {
                 std::fprintf(stderr, "Orbit smoke: %s\n", args);
                 std::fflush(stderr);
@@ -600,7 +601,13 @@ private:
                   if (!valid) window.orbitShellTest(false, {
                     alarmDelivered, eqSaved, soundShape, desktopShape, proxyTest, mediaTest, dropTest,
                     media: system.media && {...system.media, cover: Boolean(system.media.cover)},
-                    sources: system.sources
+                    sources: system.sources,
+                    loadedSettings: Boolean(initial.settings),
+                    savedNotes: stored.state.notes[0]?.text === notes[0].text,
+                    savedReminder: added[0]?.text === 'Orbit QA',
+                    expanded: Boolean(document.querySelector('#island.expanded')),
+                    weather: Boolean(document.querySelector('[data-page=weather]')),
+                    islandRadius: getComputedStyle(document.querySelector('#island')).borderTopLeftRadius
                   });
                   else {
                     const recorder = await orbit.recordStream.begin('video/webm');
