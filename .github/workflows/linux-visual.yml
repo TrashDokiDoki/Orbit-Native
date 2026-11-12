@@ -24,7 +24,7 @@ jobs:
       - name: Install the verified package and display tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick
+          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick xcompmgr x11-xserver-utils
       - name: Capture the compact island, main panel and preferences
         shell: bash
         run: |
@@ -36,9 +36,12 @@ jobs:
           settings_dir="$XDG_DATA_HOME/OrbitNative/Orbit Native Shell"
           mkdir -p "$settings_dir"
           printf '%s\n' '{"settings":{"collapseOnLeave":false}}' > "$settings_dir/shell.json"
+          xsetroot -solid "#263143"
+          xcompmgr > captures/compositor.log 2>&1 &
+          compositor=$!
           OrbitShell > captures/app.log 2>&1 &
           app=$!
-          trap 'kill "$app" 2>/dev/null || true' EXIT
+          trap 'kill "$app" "$compositor" 2>/dev/null || true' EXIT
           wait_window() {
             local title=$1
             for _ in {1..60}; do
@@ -64,7 +67,7 @@ jobs:
           (( WIDTH > 700 ))
           xdotool mousemove --window "$island" 45 19
           sleep 1
-          import -window "$island" captures/home.png
+          import -window root captures/home-desktop.png
           xdotool mousemove --window "$island" "$(( WIDTH - 39 ))" 39 click 1
           settings=$(wait_window '^Orbit Native — Settings$')
           sleep 1
