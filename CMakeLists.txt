@@ -95,6 +95,10 @@ if(ORBIT_WEB_SHELL)
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.html"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.css"
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.js"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/capture.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/capture.js"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shell/vendor/jsqr/jsQR.js"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shell/vendor/jsqr/LICENSE"
             "$<TARGET_FILE_DIR:OrbitShell>/orbit-shell-ui")
     add_test(NAME shell-ui COMMAND OrbitShell --smoke-test)
     set_tests_properties(shell-ui PROPERTIES TIMEOUT 40)

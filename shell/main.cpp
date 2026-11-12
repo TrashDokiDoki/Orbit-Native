@@ -13,6 +13,10 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QImageReader>
+#include <QProcess>
+#include <QRegularExpression>
+#include <QTemporaryFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -102,6 +106,7 @@ public:
         if (testing_) QTimer::singleShot(20000, this, [this] { webview_terminate(main_); });
         scheduleTimer();
         webview_run(main_);
+        if (editor_) webview_destroy(editor_);
         if (preferences_) webview_destroy(preferences_);
         webview_destroy(main_);
         return testing_ && !passed_ ? 1 : 0;
@@ -125,6 +130,13 @@ private:
             channel->owner->receive(*channel, id, request);
         }, channel);
         webview_init(window, js.constData());
+        if (testing_ && (island || page == "capture.html")) {
+            webview_bind(window, "orbitShellTest", [](const char *, const char *args, void *data) {
+                auto *self = static_cast<OrbitShellController *>(data);
+                self->passed_ = QJsonDocument::fromJson(args).array().at(0).toBool();
+                webview_terminate(self->main_);
+            }, this);
+        }
         if (testing_ && island) {
             webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
@@ -134,30 +146,40 @@ private:
                   await orbit.notesSave(notes);
                   const added = await orbit.reminder('add', {text:'Orbit QA',at:Date.now()+60000,repeat:'once'});
                   const stored = await orbit.get();
-                  const valid = Boolean(initial.settings && stored.state.notes[0]?.text === notes[0].text && added[0]?.text === 'Orbit QA' &&
-                    document.querySelector('#island.expanded') && document.querySelector('[data-page=weather]') &&
+                  const valid = Boolean(initial.settings && stored.state.notes[0]?.text === notes[0].text &&
+                    added[0]?.text === 'Orbit QA' && document.querySelector('#island.expanded') &&
+                    document.querySelector('[data-page=weather]') &&
                     getComputedStyle(document.querySelector('#island')).borderTopLeftRadius !== '0px');
-                  window.orbitShellTest(valid);
+                  if (!valid || (await orbit.capture('edit'))?.error) window.orbitShellTest(false);
                 });
             )JS");
-            webview_bind(window, "orbitShellTest", [](const char *id, const char *args, void *data) {
-                auto *self = static_cast<OrbitShellController *>(data);
-                self->passed_ = QJsonDocument::fromJson(args).array().at(0).toBool();
-                webview_return(self->main_, id, 0, "null");
-                webview_terminate(self->main_);
-            }, this);
+        } else if (testing_ && page == "capture.html") {
+            webview_init(window, R"JS(
+                document.addEventListener('DOMContentLoaded', () => {
+                  orbit.onCapture(async () => {
+                    const canvas = document.querySelector('canvas');
+                    for (let i=0; i<30 && canvas.width!==96; i++) await new Promise(resolve=>setTimeout(resolve,50));
+                    const decoded = canvas.width === 96 && canvas.height === 64;
+                    const color = await orbit.color('#7856aa');
+                    const copied = await orbit.captureResult({action:'copy',data:canvas.toDataURL('image/png')});
+                    window.orbitShellTest(decoded && color === true && copied?.ok === true && typeof window.jsQR === 'function');
+                  });
+                });
+            )JS");
         }
-        webview_set_title(window, island ? "Orbit Native" : "Orbit Native — Settings");
+        webview_set_title(window, island ? "Orbit Native" : page == "capture.html" ? "Orbit Native — Capture" : "Orbit Native — Settings");
         if (island) styleWindow();
         else {
             webview_set_size(window, 1020, 790, WEBVIEW_HINT_NONE);
 #ifdef Q_OS_WIN
-            SetWindowSubclass(static_cast<HWND>(webview_get_window(window)), hidePreferences, 1, 0);
+            SetWindowSubclass(static_cast<HWND>(webview_get_window(window)), hideSecondary, 1, reinterpret_cast<DWORD_PTR>(this));
 #elif defined(Q_OS_LINUX)
-            g_signal_connect(webview_get_window(window), "delete-event", G_CALLBACK(+[](GtkWidget *widget, GdkEvent *, gpointer) {
-                gtk_widget_hide(widget);
+            g_signal_connect(webview_get_window(window), "delete-event", G_CALLBACK(+[](GtkWidget *widget, GdkEvent *, gpointer data) {
+                auto *self = static_cast<OrbitShellController *>(data);
+                if (self->editor_ && widget == webview_get_window(self->editor_)) self->closeCapture();
+                else gtk_widget_hide(widget);
                 return TRUE;
-            }), nullptr);
+            }), this);
 #endif
         }
         webview_navigate(window, address.constData());
@@ -165,9 +187,14 @@ private:
     }
 
 #ifdef Q_OS_WIN
-    static LRESULT CALLBACK hidePreferences(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR)
+    static LRESULT CALLBACK hideSecondary(HWND window, UINT message, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR context)
     {
-        if (message == WM_CLOSE) { ShowWindow(window, SW_HIDE); return 0; }
+        auto *self = reinterpret_cast<OrbitShellController *>(context);
+        if (message == WM_CLOSE) {
+            if (self->editor_ && window == webview_get_window(self->editor_)) self->closeCapture();
+            else ShowWindow(window, SW_HIDE);
+            return 0;
+        }
         return DefSubclassProc(window, message, wParam, lParam);
     }
 #endif
@@ -482,6 +509,185 @@ private:
     }
 
     using Respond = std::function<void(QJsonValue)>;
+    void visible(webview_t window, bool show)
+    {
+        if (!window) return;
+#ifdef Q_OS_WIN
+        ShowWindow(static_cast<HWND>(webview_get_window(window)), show ? SW_SHOWNA : SW_HIDE);
+#elif defined(Q_OS_LINUX)
+        auto *widget = GTK_WIDGET(webview_get_window(window));
+        if (show) gtk_widget_show(widget);
+        else gtk_widget_hide(widget);
+#endif
+    }
+
+    void closeCapture()
+    {
+        visible(editor_, false);
+        visible(main_, true);
+        snapshot_ = {};
+        capturePending_ = false;
+    }
+
+    void capture(const QString &mode, const Respond &done)
+    {
+        if (mode != "edit" && mode != "full" && mode != "ocr" && mode != "qr" && mode != "color") {
+            done(error(QStringLiteral("Неизвестный режим захвата")));
+            return;
+        }
+        if (capturePending_ || !snapshot_.isEmpty()) { done(error(QStringLiteral("Редактор уже открыт"))); return; }
+        if (!testing_ && QGuiApplication::platformName().startsWith("wayland")) {
+            done(error(QStringLiteral("Под Wayland нужен портал захвата. Его адаптер ещё переносится.")));
+            return;
+        }
+        capturePending_ = true;
+        visible(main_, false);
+        QTimer::singleShot(testing_ ? 0 : 220, this, [this, mode, done] {
+            QImage screenImage;
+            auto screens = QGuiApplication::screens();
+            const auto index = settings_.value("monitor").toInt();
+            auto *screen = index >= 0 && index < screens.size() ? screens.at(index) : QGuiApplication::primaryScreen();
+            if (testing_) {
+                screenImage = QImage(96, 64, QImage::Format_RGB32);
+                screenImage.fill(QColor("#7856aa"));
+            } else if (screen) {
+                screenImage = screen->grabWindow(0).toImage();
+            }
+            if (screenImage.isNull()) {
+                closeCapture();
+                done(error(QStringLiteral("Не удалось сделать снимок монитора")));
+                return;
+            }
+            if (mode == "full") {
+                if (!testing_) QApplication::clipboard()->setImage(screenImage);
+                closeCapture();
+                done(true);
+                return;
+            }
+            QBuffer png;
+            if (!png.open(QIODevice::WriteOnly) || !screenImage.save(&png, "PNG") || png.size() > 32 * 1024 * 1024) {
+                closeCapture();
+                done(error(QStringLiteral("Снимок слишком большой или недоступен")));
+                return;
+            }
+            snapshot_ = QJsonObject{{"image", QStringLiteral("data:image/png;base64,") + QString::fromLatin1(png.data().toBase64())},
+                {"mode", mode}};
+            if (!editor_) {
+                editor_ = webview_create(false, nullptr);
+                if (editor_ && !open(editor_, "capture.html", false)) { webview_destroy(editor_); editor_ = nullptr; }
+            } else {
+                emitTo(editor_, "capture", snapshot_);
+            }
+            if (!editor_) {
+                closeCapture();
+                done(error(QStringLiteral("Не удалось открыть редактор")));
+                return;
+            }
+#ifdef Q_OS_WIN
+            auto hwnd = static_cast<HWND>(webview_get_window(editor_));
+            auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+            SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~(WS_CAPTION | WS_THICKFRAME)) | WS_POPUP);
+            MONITORINFO monitor{sizeof(MONITORINFO)};
+            if (GetMonitorInfoW(MonitorFromWindow(static_cast<HWND>(webview_get_window(main_)), MONITOR_DEFAULTTOPRIMARY), &monitor)) {
+                const auto area = monitor.rcMonitor;
+                SetWindowPos(hwnd, HWND_TOPMOST, area.left, area.top, area.right-area.left, area.bottom-area.top,
+                             SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            }
+#elif defined(Q_OS_LINUX)
+            gtk_window_fullscreen(GTK_WINDOW(webview_get_window(editor_)));
+#endif
+            visible(editor_, true);
+            capturePending_ = false;
+            done(true);
+        });
+    }
+
+    static QImage decodeImage(const QString &source)
+    {
+        const QString prefix = QStringLiteral("data:image/png;base64,");
+        if (!source.startsWith(prefix) || source.size() > 46 * 1024 * 1024) return {};
+        auto bytes = QByteArray::fromBase64(source.mid(prefix.size()).toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+        QBuffer buffer(&bytes);
+        if (!buffer.open(QIODevice::ReadOnly)) return {};
+        QImageReader reader(&buffer, "PNG");
+        const auto size = reader.size();
+        if (!size.isValid() || qint64(size.width()) * size.height() > 40000000) return {};
+        return reader.read();
+    }
+
+    void recognize(const QImage &image, const Respond &done)
+    {
+        const auto executable = QStandardPaths::findExecutable("tesseract");
+        if (executable.isEmpty()) {
+            done(error(QStringLiteral("Для OCR установите Tesseract и добавьте его в PATH.")));
+            return;
+        }
+        auto *process = new QProcess(this);
+        auto *file = new QTemporaryFile(QDir::tempPath() + "/orbit-ocr-XXXXXX.png", process);
+        if (!file->open() || !image.save(file, "PNG")) {
+            process->deleteLater();
+            done(error(QStringLiteral("Не удалось сохранить временное изображение")));
+            return;
+        }
+        const auto path = file->fileName();
+        file->close();
+        connect(process, &QProcess::errorOccurred, this, [process, done](QProcess::ProcessError issue) {
+            if (issue != QProcess::FailedToStart) return;
+            done(error(QStringLiteral("Не удалось запустить Tesseract")));
+            process->deleteLater();
+        });
+        connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [process, done](int code, QProcess::ExitStatus exit) {
+            if (code || exit != QProcess::NormalExit) {
+                done(error(QStringLiteral("OCR не выполнен. Проверьте языковые данные Tesseract.")));
+            } else {
+                const auto text = QString::fromUtf8(process->readAllStandardOutput()).trimmed();
+                QApplication::clipboard()->setText(text);
+                done(QJsonObject{{"text", text}});
+            }
+            process->deleteLater();
+        });
+        QTimer::singleShot(20000, process, [process] { if (process->state() != QProcess::NotRunning) process->kill(); });
+        process->start(executable, {path, "stdout"});
+    }
+
+    void captureResult(const QJsonObject &request, const Respond &done)
+    {
+        const auto action = request.value("action").toString();
+        if (action == "close") { closeCapture(); done(true); return; }
+        const auto image = decodeImage(request.value("data").toString());
+        if (image.isNull()) { done(error(QStringLiteral("Пустое или повреждённое изображение"))); return; }
+        if (action == "ocr") {
+            recognize(image, done);
+        } else if (action == "copy") {
+            if (!testing_) QApplication::clipboard()->setImage(image);
+            closeCapture();
+            done(QJsonObject{{"ok", true}});
+        } else if (action == "save") {
+            const auto path = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Сохранить PNG"), "Orbit.png", "PNG (*.png)");
+            if (path.isEmpty()) { done(QJsonObject{{"ok", false}}); return; }
+            if (!image.save(path, "PNG")) { done(error(QStringLiteral("Не удалось сохранить PNG"))); return; }
+            closeCapture();
+            done(QJsonObject{{"ok", true}});
+        } else {
+            done(error(QStringLiteral("Неизвестное действие редактора")));
+        }
+    }
+
+    QJsonValue pickColor(const QString &color)
+    {
+        static const QRegularExpression valid(QStringLiteral("^#[0-9a-fA-F]{6}$"));
+        if (!valid.match(color).hasMatch()) return error(QStringLiteral("Неверный цвет"));
+        if (!testing_) QApplication::clipboard()->setText(color);
+        auto colors = state_.value("colors").toArray();
+        for (qsizetype i = colors.size(); i-- > 0;) {
+            if (colors.at(i).toString() == color) colors.removeAt(i);
+        }
+        colors.prepend(color);
+        while (colors.size() > 20) colors.removeLast();
+        state_["colors"] = colors;
+        return persist() ? QJsonValue(true) : QJsonValue(error(QStringLiteral("Не удалось сохранить цвет")));
+    }
+
     void request(const QUrl &url, Respond done)
     {
         QNetworkRequest request(url);
@@ -539,7 +745,7 @@ private:
     {
         const auto window = channel.window;
         const auto respond = [window, id](const QJsonValue &value) { webview_return(window, id.constData(), 0, json(value).constData()); };
-        if (requestBody.size() > 8 * 1024 * 1024) { respond(error("Request too large")); return; }
+        if (requestBody.size() > (window == editor_ ? 48 : 8) * 1024 * 1024) { respond(error("Request too large")); return; }
         const auto args = QJsonDocument::fromJson(requestBody).array();
         if (args.size() != 3 || args.at(0).toString() != channel.token) { respond(error("Untrusted window")); return; }
         const auto command = args.at(1).toString();
@@ -594,6 +800,14 @@ private:
             else respond(true);
         } else if (command == "weather") {
             weather(first.toString(), respond);
+        } else if (command == "capture" && window == main_) {
+            capture(first.toString(), respond);
+        } else if (command == "capture-ready" && window == editor_) {
+            respond(snapshot_);
+        } else if (command == "capture-result" && window == editor_) {
+            captureResult(first.toObject(), respond);
+        } else if (command == "color" && window == editor_) {
+            respond(pickColor(first.toString()));
         } else if (command == "timer" && window == main_) {
             respond(timer(first.toObject()));
         } else if (command == "reminder" && window == main_) {
@@ -645,7 +859,9 @@ private:
     QTimer alarm_;
     QJsonObject settings_, state_;
     QJsonValue lastMedia_ = QJsonValue::Null;
-    webview_t main_ = nullptr, preferences_ = nullptr;
+    webview_t main_ = nullptr, preferences_ = nullptr, editor_ = nullptr;
+    QJsonObject snapshot_;
+    bool capturePending_ = false;
     std::vector<std::unique_ptr<Channel>> channels_;
 };
 }

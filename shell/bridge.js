@@ -20,6 +20,31 @@
   api.controlsView = visible => void call('controls-view', visible);
   api.dragFile = id => void call('drag-file', id);
   api.filePath = () => '';
+  if (location.pathname.endsWith('/capture.html')) {
+    api.qr = async source => {
+      try {
+        const image = new Image();
+        image.src = source;
+        await image.decode();
+        const canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const ctx = canvas.getContext('2d', {willReadFrequently:true});
+        ctx.drawImage(image, 0, 0);
+        const data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const result = window.jsQR(data.data, data.width, data.height);
+        if (!result) return {error:'QR-код не найден. Выделите область точнее.'};
+        const copied = await api.copy(result.data);
+        return copied?.error ? copied : {text:result.data};
+      } catch {
+        return {error:'Не удалось прочитать изображение QR-кода'};
+      }
+    };
+    document.addEventListener('DOMContentLoaded', async () => {
+      const snapshot = await call('capture-ready');
+      if (!snapshot.error) window.orbitNativeDispatch('capture', snapshot);
+    });
+  }
   document.addEventListener('DOMContentLoaded', () => {
     const island = document.getElementById('island');
     if (!island) return;
