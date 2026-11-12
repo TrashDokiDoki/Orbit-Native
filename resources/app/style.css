@@ -486,7 +486,7 @@ body.light .home-dashboard { --player-surface: #f0eef3; --player-line: #201b2c21
 #audio-level::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; border-radius: 50%; background: var(--accent); cursor: pointer; }
 #audio-value { width: 28px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 #audio-device { width: min(175px, 38%); min-width: 0; text-overflow: ellipsis; }
-#audio-device, #media-source {
+#island select {
   appearance: none;
   padding: 5px 24px 5px 8px;
   background:
@@ -494,7 +494,7 @@ body.light .home-dashboard { --player-surface: #f0eef3; --player-line: #201b2c21
     linear-gradient(135deg, var(--muted) 50%, transparent 50%) right 8px center / 4px 4px no-repeat,
     var(--input);
 }
-#audio-device:disabled { opacity: .6; }
+#island select:disabled { opacity: .6; }
 #eq-open { padding: 4px 7px; color: var(--accent); font-size: 17px; }
 #eq-dialog {
   width: min(490px, 94%);

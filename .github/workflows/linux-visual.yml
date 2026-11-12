@@ -77,8 +77,10 @@ jobs:
           import -window root captures/home-after-6s.png
           capture_tab() {
             local offset=$1 name=$2
+            xdotool mousemove --window "$island" 40 39 click 1
+            sleep .5
             xdotool mousemove --window "$island" "$offset" 39 click 1
-            sleep 1
+            sleep 2
             import -window root "captures/$name.png"
           }
           capture_tab 344 weather
