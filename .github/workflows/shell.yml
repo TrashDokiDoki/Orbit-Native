@@ -94,6 +94,13 @@ jobs:
           version: '6.8.3'
           arch: ${{ matrix.qtArch }}
       - run: choco install nsis --yes --no-progress
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/orbit-vcpkg-cache
+          key: windows-${{ matrix.arch }}-ocr-${{ hashFiles('packaging/ocr/vcpkg.json') }}
+      - name: Build the bundled OCR runtime
+        shell: pwsh
+        run: ./packaging/ocr/build-windows.ps1 -Architecture ${{ matrix.arch }} -Output orbit-ocr
       - name: Get signed Microsoft WebView2 bootstrapper
         shell: pwsh
         run: |
@@ -103,7 +110,7 @@ jobs:
           if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Microsoft Corporation') {
             throw 'The Microsoft WebView2 bootstrapper signature could not be verified'
           }
-      - run: cmake -S . -B build -A ${{ matrix.generatorArch }} -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON "-DORBIT_WEBVIEW2_BOOTSTRAPPER=$((Resolve-Path WebView2Setup.exe).Path -replace '\\','/')"
+      - run: cmake -S . -B build -A ${{ matrix.generatorArch }} -DORBIT_WEB_SHELL=ON -DORBIT_PACKAGE_SHELL=ON "-DORBIT_WEBVIEW2_BOOTSTRAPPER=$((Resolve-Path WebView2Setup.exe).Path -replace '\\','/')" "-DORBIT_TESSERACT_BUNDLE=${{ github.workspace }}/orbit-ocr"
       - run: cmake --build build --config Release --parallel --target OrbitShell
       - run: ctest --test-dir build --build-config Release -R '^shell-ui$' --output-on-failure
       - name: Report crash details
@@ -129,6 +136,11 @@ jobs:
           $setup = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$dest") -WindowStyle Hidden -Wait -PassThru
           if ($setup.ExitCode -ne 0) { throw "Installer exit code $($setup.ExitCode)" }
           $exe = Join-Path $dest 'bin/OrbitShell.exe'
+          $ocr = Join-Path $dest 'bin/orbit-ocr/tesseract.exe'
+          $languages = & $ocr --tessdata-dir (Join-Path $dest 'bin/orbit-ocr/tessdata') --list-langs
+          if ($LASTEXITCODE -ne 0 -or $languages -notcontains 'rus' -or $languages -notcontains 'eng') {
+            throw 'Bundled Russian and English OCR could not start'
+          }
           $test = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru
           if (!$test.WaitForExit(30000)) { Stop-Process -Id $test.Id; throw 'Smoke test timed out' }
           if ($test.ExitCode -ne 0) { throw "Smoke test exit code $($test.ExitCode)" }

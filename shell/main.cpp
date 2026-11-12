@@ -1375,7 +1375,7 @@ private:
 #endif
             QImage screenImage;
             const auto screens = QGuiApplication::screens();
-            const auto *screen = screens.value(settings_.value("monitor").toInt(), QGuiApplication::primaryScreen());
+            auto *screen = screens.value(settings_.value("monitor").toInt(), QGuiApplication::primaryScreen());
             if (testing_) {
                 screenImage = QImage(96, 64, QImage::Format_RGB32);
                 screenImage.fill(QColor("#7856aa"));
@@ -1454,7 +1454,16 @@ private:
 
     void recognize(const QImage &image, const Respond &done)
     {
-        const auto executable = QStandardPaths::findExecutable("tesseract");
+        auto executable = QStandardPaths::findExecutable("tesseract");
+        QStringList languages{"-l", "rus+eng"};
+#ifdef Q_OS_WIN
+        const QDir bundled(QDir(QCoreApplication::applicationDirPath()).filePath("orbit-ocr"));
+        const auto installed = bundled.filePath("tesseract.exe");
+        if (QFileInfo::exists(installed)) {
+            executable = installed;
+            languages << "--tessdata-dir" << bundled.filePath("tessdata");
+        } else languages.clear();
+#endif
         if (executable.isEmpty()) {
             done(error(QStringLiteral("Для OCR установите Tesseract и добавьте его в PATH.")));
             return;
@@ -1484,11 +1493,12 @@ private:
             process->deleteLater();
         });
         QTimer::singleShot(20000, process, [process] { if (process->state() != QProcess::NotRunning) process->kill(); });
-#ifdef Q_OS_LINUX
-        process->start(executable, {path, "stdout", "-l", "rus+eng"});
-#else
-        process->start(executable, {path, "stdout"});
+#ifdef Q_OS_WIN
+        process->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments *arguments) {
+            arguments->flags |= CREATE_NO_WINDOW;
+        });
 #endif
+        process->start(executable, QStringList{path, "stdout"} + languages);
     }
 
     void captureResult(const QJsonObject &request, const Respond &done)
