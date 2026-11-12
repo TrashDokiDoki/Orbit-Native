@@ -1,0 +1,15 @@
+{
+  "clips": [],
+  "shelf": [],
+  "notes": [
+    {
+      "id": "welcome",
+      "name": "Моя заметка",
+      "folder": "Личное",
+      "text": "Добро пожаловать в Orbit.\n\nЗдесь можно хранить идеи и задачи."
+    }
+  ],
+  "reminders": [],
+  "timer": null,
+  "colors": []
+}

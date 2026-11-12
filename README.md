@@ -46,3 +46,14 @@ build/Release/OrbitNative.exe
 Для создания пакета запустите `cpack --config build/CPackConfig.cmake -B package` на Linux или добавьте `-C Release` на Windows с установленным NSIS. Первые пакеты рассчитаны на x64. Для ARM64 нужны отдельные Qt SDK и проверка на устройстве. Настройки Orbit Native сохраняются отдельно. Погода использует Open-Meteo, лаунчер открывает ссылки в браузере по нажатию.
 
 [Лицензия Orbit](resources/app/LICENSE)
+
+## Перенос интерфейса Orbit 0.3.3
+
+Экспериментальная цель `OrbitShell` загружает исходные HTML, CSS, JavaScript и изображения Orbit. На Windows она использует системный WebView2, на Linux — GTK 3 и WebKitGTK 4.1. Qt обслуживает данные и запросы, медиаклавиши Windows и MPRIS Linux остаются в отдельных адаптерах.
+
+```bash
+cmake -S . -B build -DORBIT_WEB_SHELL=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target OrbitShell --parallel
+```
+
+Для Linux дополнительно нужны `libgtk-3-dev` и `libwebkit2gtk-4.1-dev`, для Windows — WebView2 Runtime. Цель загружает закреплённую версию webview 0.12.0 при конфигурации. Обычная сборка и установщики пока используют Qt Widgets. В экспериментальной оболочке подключены настройки, лаунчер, заметки, таймер, погода, копирование текста и базовое управление воспроизведением. Остальные вызовы показывают сообщение о незавершённом переносе. Геометрия окна под Wayland зависит от композитора. Полное совпадение системных функций и рендера на разных ОС ещё предстоит проверить.

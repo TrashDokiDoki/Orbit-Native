@@ -66,22 +66,24 @@ button {
   background: linear-gradient(#b4b4bd, #9797a1);
   opacity: 0;
   transform: translate(-50%, -50%) scaleY(.15);
-  animation: pug-blink 5.4s ease-in-out infinite;
 }
 #pill .pug::before { left: 30.5%; }
 #pill .pug::after { left: 67.5%; }
 #pill .orb {
-  --idle-period: 3.8s;
   --dance-period: 1.25s;
   --jump: -3px;
   transform-origin: center 80%;
-  animation: mascot-idle var(--idle-period) ease-in-out infinite;
 }
-#pill .sphere { --idle-period: 3.2s; --dance-period: 1.05s; }
-#pill .eyes { --idle-period: 4.4s; --dance-period: 1.15s; --jump: -2px; }
-#pill .spark { --idle-period: 3s; --dance-period: .95s; --jump: -4px; }
-.playing #pill .orb { animation-name: mascot-dance; animation-duration: var(--dance-period); }
-#pill .eyes::before, #pill .eyes::after { animation: eyes-blink 5.4s ease-in-out infinite; }
+#pill .sphere { --dance-period: 1.05s; }
+#pill .eyes { --dance-period: 1.15s; --jump: -2px; }
+#pill .spark { --dance-period: .95s; --jump: -4px; }
+#island:not(.expanded) #pill.idle-motion .orb:is([data-reaction="idle"],[data-reaction="sleep"]) { animation: mascot-idle 1.35s ease-in-out; }
+#island:not(.expanded) #pill.idle-motion .pug[data-reaction="idle"]::before,
+#island:not(.expanded) #pill.idle-motion .pug[data-reaction="idle"]::after { animation: pug-blink .55s .6s ease-in-out; }
+#island:not(.expanded) #pill.idle-motion .eyes[data-reaction="idle"]::before,
+#island:not(.expanded) #pill.idle-motion .eyes[data-reaction="idle"]::after { animation: eyes-blink .55s .6s ease-in-out; }
+.playing #island:not(.expanded) #pill .orb:not(.pixel) { animation: mascot-dance var(--dance-period) ease-in-out infinite; }
+#island.expanded #pill #mascot, #island.expanded #pill #equalizer i { animation: none; }
 @keyframes mascot-idle {
   50% { scale: 1.025 1.05; translate: 0 -1px; }
 }
@@ -92,12 +94,12 @@ button {
   82% { translate: 0 -1px; }
 }
 @keyframes eyes-blink {
-  0%, 91%, 98%, 100% { scale: 1 1; }
-  94%, 95% { scale: 1 .15; }
+  0%, 25%, 75%, 100% { scale: 1 1; }
+  45%, 55% { scale: 1 .15; }
 }
 @keyframes pug-blink {
-  0%, 91%, 97%, 100% { opacity: 0; transform: translate(-50%, -50%) scaleY(.15); }
-  93%, 95% { opacity: 1; transform: translate(-50%, -50%) scaleY(1); }
+  0%, 25%, 75%, 100% { opacity: 0; transform: translate(-50%, -50%) scaleY(.15); }
+  45%, 55% { opacity: 1; transform: translate(-50%, -50%) scaleY(1); }
 }
 
 #content { height: auto; max-height: 320px; min-height: 0; }
@@ -119,7 +121,7 @@ button {
 
 @media (prefers-reduced-motion: reduce) {
   #island, #panel, button, #mascot { transition: none; }
-  #pill #mascot, #pill #mascot::before, #pill #mascot::after { animation: none; }
+  #island #pill #mascot, #island #pill #mascot::before, #island #pill #mascot::after { animation: none; }
 }
 
 #island {

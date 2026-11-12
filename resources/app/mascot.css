@@ -33,11 +33,13 @@
 }
 .pixel[data-reaction="sleep"]::before { height: 2px; top: 47%; color: #624455; }
 .pixel[data-reaction="sleep"]::after { display: none; }
-#pill .pixel, .preview-pet.pixel { animation: pixel-idle 3s steps(3,end) infinite; }
-#pill .pixel[data-reaction="music"], .preview-pet.pixel[data-reaction="music"] { animation: pixel-dance .88s steps(3,end) infinite; }
+#island:not(.expanded) #pill.idle-motion .pixel[data-reaction="idle"] { animation: pixel-idle 1.35s steps(3,end); }
+.preview-pet.pixel { animation: pixel-idle 3s steps(3,end) infinite; }
+#island:not(.expanded) #pill .pixel[data-reaction="music"], .preview-pet.pixel[data-reaction="music"] { animation: pixel-dance .88s steps(3,end) infinite; }
 #pill .pixel[data-reaction="attention"], .preview-pet.pixel[data-reaction="attention"], #alarm-mascot.pixel { animation: pixel-alert .62s steps(4,end) infinite; }
 #pill .pixel[data-reaction="file"], .preview-pet.pixel[data-reaction="file"], .drop-target .pixel { animation: pixel-file .8s steps(4,end) infinite; }
-#pill .pixel[data-reaction="sleep"], .preview-pet.pixel[data-reaction="sleep"] { animation: pixel-sleep 2.5s steps(4,end) infinite; }
+#island:not(.expanded) #pill.idle-motion .pixel[data-reaction="sleep"] { animation: pixel-sleep 1.35s steps(4,end); }
+.preview-pet.pixel[data-reaction="sleep"] { animation: pixel-sleep 2.5s steps(4,end) infinite; }
 @keyframes pixel-idle { 45% { translate: 0 -2px; } 62% { scale: 1 .95; } }
 @keyframes pixel-dance { 22% { translate: -3px -2px; } 42% { translate: 0 -5px; scale: 1 1.08; } 67% { translate: 3px -2px; } 85% { scale: 1.1 .9; } }
 @keyframes pixel-alert { 40% { translate: 0 -4px; scale: 1.06 1.1; } 75% { scale: 1.06 .92; } }

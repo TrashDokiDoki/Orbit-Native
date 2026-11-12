@@ -1,0 +1,8 @@
+<RCC>
+  <qresource prefix="/shell">
+    <file>api.json</file>
+    <file>defaults.json</file>
+    <file>emptyState.json</file>
+    <file>bridge.js</file>
+  </qresource>
+</RCC>

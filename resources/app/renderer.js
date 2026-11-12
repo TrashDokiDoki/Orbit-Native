@@ -176,9 +176,31 @@ $('lyrics-toggle').onclick = () => {
     lyricsRequested = false;
   }
 };
+let mascotIdleTimer;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+const pill = $('pill');
+function syncIdleMotion() {
+  const reaction = $('mascot').dataset.reaction;
+  const idle = !open && document.visibilityState === 'visible' && !reduceMotion.matches &&
+    !system.media?.playing && (reaction === 'idle' || reaction === 'sleep');
+  if (!idle) {
+    clearTimeout(mascotIdleTimer);
+    mascotIdleTimer = undefined;
+    pill.classList.remove('idle-motion');
+  } else if (mascotIdleTimer === undefined) {
+    mascotIdleTimer = setTimeout(animateIdle, 5500);
+  }
+}
+function animateIdle() {
+  const active = pill.classList.toggle('idle-motion');
+  mascotIdleTimer = setTimeout(animateIdle, active ? 1400 : 5500);
+}
+reduceMotion.addEventListener('change', syncIdleMotion);
+
 let playbackTimer;
 let controlsWork = false;
 function syncPanelWork() {
+  syncIdleMotion();
   const visible = document.visibilityState === 'visible';
   const controls = visible && open && tab === 'controls';
   const network = visible && open && tab === 'network';
@@ -937,6 +959,7 @@ function updateMascot() {
   if ($('mascot').className === 'orb ' + character && $('mascot').dataset.reaction === reaction) return;
   $('mascot').className = 'orb ' + character;
   $('mascot').dataset.reaction = reaction;
+  syncIdleMotion();
   $('alarm-mascot').className = character === 'pixel' ? 'orb pixel' : 'orb';
   $('alarm-mascot').hidden = character !== 'pixel';
   $('alarm-mascot').dataset.reaction = 'attention';

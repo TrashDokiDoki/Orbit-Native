@@ -57,3 +57,44 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins")
 endif()
 include(CPack)
+
+option(ORBIT_WEB_SHELL "Build the experimental Orbit interface with system webviews" OFF)
+if(ORBIT_WEB_SHELL)
+    include(FetchContent)
+    set(WEBVIEW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+    set(WEBVIEW_INSTALL_TARGETS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(webview
+        GIT_REPOSITORY https://github.com/webview/webview.git
+        GIT_TAG 0.12.0
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(webview)
+    add_executable(OrbitShell WIN32 shell/main.cpp shell/shell.qrc native/media.cpp)
+    target_include_directories(OrbitShell PRIVATE native)
+    target_link_libraries(OrbitShell PRIVATE Qt6::Widgets Qt6::Network webview::core)
+    target_compile_definitions(OrbitShell PRIVATE QT_NO_KEYWORDS ORBIT_VERSION="${PROJECT_VERSION}")
+    if(WIN32)
+        target_link_libraries(OrbitShell PRIVATE user32 comctl32)
+        if(MSVC)
+            target_compile_options(OrbitShell PRIVATE /utf-8)
+        endif()
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(OrbitShell PRIVATE Qt6::DBus)
+    endif()
+    add_custom_command(TARGET OrbitShell POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:OrbitShell>/orbit-shell-ui"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/index.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/style.css"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/mascot.css"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/core.js"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/renderer.js"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/pug.png"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.html"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.css"
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/settings.js"
+            "$<TARGET_FILE_DIR:OrbitShell>/orbit-shell-ui")
+    add_test(NAME shell-ui COMMAND OrbitShell --smoke-test)
+    set_tests_properties(shell-ui PROPERTIES TIMEOUT 40)
+endif()

@@ -1,0 +1,51 @@
+{
+  "gpuAcceleration": true,
+  "musicCharacter": "same",
+  "musicMode": "cover",
+  "hoverDelay": 150,
+  "leaveDelay": 350,
+  "eventDuration": 1650,
+  "hiddenModules": [],
+  "hiddenTabs": [],
+  "restrictedApps": "",
+  "ruleMode": "hide",
+  "clickThrough": false,
+  "rainAlerts": false,
+  "accent": "#bba8ff",
+  "position": "center",
+  "top": 12,
+  "monitor": 0,
+  "scale": 1,
+  "opacity": 1,
+  "theme": "dark",
+  "character": "pug",
+  "autostart": false,
+  "hover": true,
+  "collapseOnLeave": true,
+  "shape": "capsule",
+  "autohide": false,
+  "hideFullscreen": true,
+  "clipboard": false,
+  "shortcut": "Alt+Space",
+  "items": [
+    {
+      "name": "Spotify",
+      "target": "spotify:",
+      "fallback": "https://open.spotify.com",
+      "symbol": "♫",
+      "group": ""
+    },
+    {
+      "name": "Codex",
+      "target": "https://chatgpt.com/codex",
+      "symbol": "⌘",
+      "group": ""
+    },
+    {
+      "name": "ChatGPT",
+      "target": "https://chatgpt.com",
+      "symbol": "✳",
+      "group": ""
+    }
+  ]
+}
