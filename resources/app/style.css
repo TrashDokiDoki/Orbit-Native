@@ -485,10 +485,10 @@ body.light .home-dashboard { --player-surface: #f0eef3; --player-line: #201b2c21
 }
 #audio-level::-webkit-slider-thumb { appearance: none; width: 11px; height: 11px; border-radius: 50%; background: var(--accent); cursor: pointer; }
 #audio-value { width: 28px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
-#audio-device { width: min(175px, 38%); min-width: 0; text-overflow: ellipsis; }
+#audio-device { width: min(175px, 38%); min-width: 0; padding: 5px 7px; text-overflow: ellipsis; }
 #island select {
   appearance: none;
-  padding: 5px 24px 5px 8px;
+  padding-inline-end: 24px;
   background:
     linear-gradient(45deg, transparent 50%, var(--muted) 50%) right 12px center / 4px 4px no-repeat,
     linear-gradient(135deg, var(--muted) 50%, transparent 50%) right 8px center / 4px 4px no-repeat,
