@@ -31,7 +31,7 @@ QString WaylandVideoEncoder::start(PortalScreenStream stream, const QString &out
         return QStringLiteral("Не удалось запустить GStreamer");
     }
     pipeline_ = gst_parse_launch(
-        "pipewiresrc name=source ! queue leaky=downstream max-size-buffers=3 max-size-bytes=0 max-size-time=0 "
+        "pipewiresrc name=source keepalive-time=200 ! queue leaky=downstream max-size-buffers=3 max-size-bytes=0 max-size-time=0 "
         "! videoconvert ! video/x-raw,format=I420 ! vp8enc deadline=1 ! webmmux ! filesink name=output",
         &failure);
     if (!pipeline_ || failure) {

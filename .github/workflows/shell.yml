@@ -72,6 +72,7 @@ jobs:
           for element in pipewiresrc uritranscodebin webmmux vp8enc; do
             gst-inspect-1.0 "$element" >/dev/null
           done
+          gst-inspect-1.0 pipewiresrc | grep -F 'keepalive-time'
           command -v tesseract
           tesseract --list-langs | grep -x rus
           curl -fsSL https://raw.githubusercontent.com/alphacep/vosk-api/v0.3.45/python/example/test.wav -o "$RUNNER_TEMP/dictation.wav"
