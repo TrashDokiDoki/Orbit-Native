@@ -24,7 +24,7 @@ jobs:
       - name: Install the verified package and display tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick xcompmgr x11-xserver-utils pulseaudio openbox xclip python3-gi
+          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick xcompmgr x11-xserver-utils pulseaudio openbox xclip python3-gi gir1.2-gtk-3.0
       - name: Capture the compact island, main panel and preferences
         shell: bash
         run: |
