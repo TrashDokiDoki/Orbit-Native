@@ -99,6 +99,11 @@ jobs:
             trap "kill $fixture" EXIT
             ORBIT_TEST_PORTAL=1 OrbitShell --smoke-test
           '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OrbitShell-linux-installer-${{ matrix.arch }}
+          path: package/*.deb
+          if-no-files-found: error
       - name: Capture a real Wayland output through the system portal
         if: matrix.arch == 'x64'
         run: |
@@ -183,14 +188,10 @@ jobs:
           printf 'Decoded Wayland recording: %s video frames\n' "$frames"
           EOF
       - name: Remove the Debian package
+        if: success() || failure()
         run: |
           sudo apt-get remove -y orbit-native-shell
           test ! -e /usr/bin/OrbitShell
-      - uses: actions/upload-artifact@v4
-        with:
-          name: OrbitShell-linux-installer-${{ matrix.arch }}
-          path: package/*.deb
-          if-no-files-found: error
   windows:
     name: windows-${{ matrix.arch }}
     strategy:
