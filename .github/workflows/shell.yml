@@ -176,7 +176,10 @@ jobs:
             exit 1
           fi
           frames=$(ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of csv=p=0 "$ORBIT_TEST_RECORD_OUTPUT")
-          [[ "$frames" =~ ^[0-9]+$ ]] && (( frames >= 2 ))
+          if ! [[ "$frames" =~ ^[0-9]+$ ]] || (( frames < 2 )); then
+            echo "Expected at least two decoded video frames, got: $frames" >&2
+            exit 1
+          fi
           printf 'Decoded Wayland recording: %s video frames\n' "$frames"
           EOF
       - name: Remove the Debian package
