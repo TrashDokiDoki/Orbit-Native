@@ -1986,7 +1986,7 @@ private:
     using Respond = std::function<void(QJsonValue)>;
 
 #ifdef Q_OS_LINUX
-    void startWaylandRecording(const Respond &respond)
+    void startWaylandRecording(bool captureAudio, const Respond &respond)
     {
         if (recordFile_ || waylandPortal_) {
             respond(error(QStringLiteral("Запись уже открыта")));
@@ -1994,13 +1994,30 @@ private:
         }
         waylandPortal_ = new PortalScreencast(this);
         connect(waylandPortal_, &PortalScreencast::closed, this, [this] { waylandEncoder_.stop(); });
-        waylandPortal_->start([this, respond](PortalScreenStream stream, QString issue) {
+        if (captureAudio) {
+            recordingAudio_.request("monitor", {}, [this, respond](const QJsonObject &result) {
+                const auto monitor = result.value("monitor").toString();
+                if (monitor.isEmpty()) {
+                    std::exchange(waylandPortal_, nullptr)->deleteLater();
+                    respond(error(result.value("error").toString(QStringLiteral("Источник системного звука недоступен"))));
+                    return;
+                }
+                openWaylandRecording(monitor, respond);
+            });
+        } else {
+            openWaylandRecording({}, respond);
+        }
+    }
+
+    void openWaylandRecording(const QString &monitor, const Respond &respond)
+    {
+        waylandPortal_->start([this, monitor, respond](PortalScreenStream stream, QString issue) {
             if (issue.isEmpty()) {
                 const auto result = beginRecording("video/webm");
                 if (result.isObject()) issue = result.toObject().value("error").toString();
             }
             if (issue.isEmpty()) {
-                issue = waylandEncoder_.start(std::move(stream), recordFile_->fileName(), [this](QString failure) {
+                issue = waylandEncoder_.start(std::move(stream), recordFile_->fileName(), monitor, [this](QString failure) {
                     auto *portal = std::exchange(waylandPortal_, nullptr);
                     portal->deleteLater();
                     recording_ = false;
@@ -2549,7 +2566,7 @@ private:
 #ifdef Q_OS_LINUX
         } else if (command == "wayland-record-start" && window == main_ &&
                    QGuiApplication::platformName().startsWith("wayland")) {
-            startWaylandRecording(respond);
+            startWaylandRecording(first.toBool(), respond);
         } else if (command == "wayland-record-stop" && window == main_ && recording_ && waylandPortal_) {
             QTimer::singleShot(0, this, [this] { waylandEncoder_.stop(); });
             respond(true);
@@ -2780,6 +2797,7 @@ private:
 #ifdef Q_OS_LINUX
     PortalScreencast *waylandPortal_ = nullptr;
     WaylandVideoEncoder waylandEncoder_;
+    Audio recordingAudio_;
 #endif
     QUrl coverUrl_;
     QString fetchedCover_;

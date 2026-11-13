@@ -138,6 +138,7 @@ struct Audio::Backend {
     QString command;
     QJsonValue input;
     QString current;
+    QString monitor;
     QJsonObject devices;
     pa_cvolume channels{};
     bool muted = false;
@@ -209,6 +210,7 @@ struct Audio::Backend {
     {
         devices = {};
         current.clear();
+        monitor.clear();
         currentFound = false;
         operation(pa_context_get_server_info(context, [](pa_context *, const pa_server_info *info, void *user) {
             auto *self = static_cast<Backend *>(user);
@@ -230,6 +232,7 @@ struct Audio::Backend {
             const auto id = QString::fromUtf8(info->name);
             self->devices[id] = info->description ? QString::fromUtf8(info->description) : id;
             if (id == self->current) {
+                self->monitor = QString::fromUtf8(info->monitor_source_name);
                 self->channels = info->volume;
                 self->muted = info->mute != 0;
                 self->currentFound = true;
@@ -239,6 +242,11 @@ struct Audio::Backend {
 
     void apply()
     {
+        if (command == "monitor") {
+            complete(monitor.isEmpty() ? failure(QStringLiteral("Источник системного звука недоступен"))
+                                       : QJsonObject{{"monitor", monitor}});
+            return;
+        }
         if (command == "status") {
             const auto level = currentFound ? qRound(double(pa_cvolume_max(&channels)) * 100 / PA_VOLUME_NORM) : 0;
             complete(devices.isEmpty() ? noDevice() : status(devices, currentFound ? current : QString{}, level, muted));
@@ -279,6 +287,9 @@ void Audio::request(const QString &command, const QJsonValue &value, Result resu
 {
     if (command == "status" || command == "mute" || command == "up" || command == "down" ||
         (command == "level" && value.isDouble()) ||
+#ifdef Q_OS_LINUX
+        command == "monitor" ||
+#endif
         (command == "select" && value.isString() && value.toString().size() < 256)) {
         backend_->request(command, value, std::move(result));
     } else {

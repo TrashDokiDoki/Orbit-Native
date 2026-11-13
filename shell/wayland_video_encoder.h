@@ -14,7 +14,7 @@ public:
     explicit WaylandVideoEncoder(QObject *parent = nullptr);
     ~WaylandVideoEncoder() override;
 
-    QString start(PortalScreenStream stream, const QString &outputPath, Finished finished);
+    QString start(PortalScreenStream stream, const QString &outputPath, const QString &monitor, Finished finished);
     void stop();
 
 private:

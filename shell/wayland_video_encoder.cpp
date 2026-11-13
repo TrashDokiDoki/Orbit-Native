@@ -20,7 +20,7 @@ WaylandVideoEncoder::~WaylandVideoEncoder()
     release();
 }
 
-QString WaylandVideoEncoder::start(PortalScreenStream stream, const QString &outputPath, Finished finished)
+QString WaylandVideoEncoder::start(PortalScreenStream stream, const QString &outputPath, const QString &monitor, Finished finished)
 {
     if (pipeline_) return QStringLiteral("Запись уже запущена");
     if (!stream.remote.isValid() || !stream.node) return QStringLiteral("Портал не вернул видеопоток");
@@ -30,10 +30,13 @@ QString WaylandVideoEncoder::start(PortalScreenStream stream, const QString &out
         g_clear_error(&failure);
         return QStringLiteral("Не удалось запустить GStreamer");
     }
-    pipeline_ = gst_parse_launch(
+    QByteArray description =
         "pipewiresrc name=source keepalive-time=200 ! queue leaky=downstream max-size-buffers=3 max-size-bytes=0 max-size-time=0 "
-        "! videoconvert ! video/x-raw,format=I420 ! vp8enc deadline=1 ! webmmux ! filesink name=output",
-        &failure);
+                "! videoconvert ! video/x-raw,format=I420 ! vp8enc deadline=1 ! mux.video_0 "
+        "webmmux name=mux ! filesink name=output";
+    if (!monitor.isEmpty())
+        description += " pulsesrc name=audio ! queue ! audioconvert ! audioresample ! opusenc ! mux.audio_0";
+    pipeline_ = gst_parse_launch(description.constData(), &failure);
     if (!pipeline_ || failure) {
         g_clear_error(&failure);
         release();
@@ -48,6 +51,11 @@ QString WaylandVideoEncoder::start(PortalScreenStream stream, const QString &out
     g_object_set(output, "location", path.constData(), nullptr);
     gst_object_unref(source);
     gst_object_unref(output);
+    if (auto *audio = gst_bin_get_by_name(GST_BIN(pipeline_), "audio")) {
+        const auto device = monitor.toUtf8();
+        g_object_set(audio, "device", device.constData(), nullptr);
+        gst_object_unref(audio);
+    }
 
     if (gst_element_set_state(pipeline_, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         release();
