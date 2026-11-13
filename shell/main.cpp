@@ -401,13 +401,14 @@ private:
             const auto modified = QFileInfo(log).lastModified();
             if (!modified.isValid()) continue;
             const auto age = modified.secsTo(now);
-            if (age < 0 || age > 120 || !log.open(QIODevice::ReadOnly)) continue;
+            if (age < 0 || !log.open(QIODevice::ReadOnly)) continue;
             if (!log.seek(qMax(qint64{0}, log.size() - 65536))) continue;
             static const QRegularExpression event(R"(^\[([^\]]+)\] AppID (\d+) (.+)$)");
             static const QRegularExpression sample(R"(^update (?:started|progress)\s*:\s*download (\d+)/(\d+))");
             static const QRegularExpression ended(R"(^(?:finished update|update canceled|update finished|App update changed\s*:\s*None))");
             QString id;
             qint64 done = 0, total = 0;
+            bool recentProgress = false;
             for (const auto &line : QString::fromUtf8(log.read(65536)).split('\n')) {
                 const auto item = event.match(line.trimmed());
                 if (!item.hasMatch()) continue;
@@ -415,10 +416,11 @@ private:
                 const auto update = sample.match(detail);
                 if (update.hasMatch()) {
                     const auto time = QDateTime::fromString(item.captured(1), QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-                    if (!time.isValid() || time.secsTo(now) > 120) continue;
+                    if (!time.isValid()) continue;
                     id = item.captured(2);
                     done = update.captured(1).toLongLong();
                     total = update.captured(2).toLongLong();
+                    recentProgress = time.secsTo(now) >= 0 && time.secsTo(now) <= 120;
                 } else if (id == item.captured(2) && ended.match(detail).hasMatch()) {
                     id.clear();
                 }
@@ -440,9 +442,14 @@ private:
                 const auto data = QString::fromUtf8(manifest.read(1024 * 1024));
                 if (expected.match(data).captured(1).toLongLong() != total) continue;
                 const auto bytes = received.match(data).captured(1).toLongLong();
-                if (bytes <= total) done = qMax(done, bytes);
+                if (bytes <= total) {
+                    const auto manifestTime = QFileInfo(manifest).lastModified();
+                    if (manifestTime.isValid() && bytes > 0 && manifestTime.secsTo(now) >= 0 &&
+                        manifestTime.secsTo(now) <= 120) recentProgress = true;
+                    done = qMax(done, bytes);
+                }
             }
-            if (done < total) progress = QStringLiteral("↓ Steam %1%").arg(int(100.0 * done / total));
+            if (recentProgress && done < total) progress = QStringLiteral("↓ Steam %1%").arg(int(100.0 * done / total));
             break;
         }
         if (progress == steamDownload_) return;
@@ -460,7 +467,8 @@ private:
         QFile log(root.filePath("logs/content_log.txt"));
         QFile manifest(root.filePath("steamapps/appmanifest_123.acf"));
         if (!log.open(QIODevice::WriteOnly) || !manifest.open(QIODevice::WriteOnly)) return false;
-        log.write(timestamp + "AppID 123 update started : download 0/100\n");
+        const auto earlier = QDateTime::currentDateTime().addSecs(-180).toString("[yyyy-MM-dd HH:mm:ss] ").toUtf8();
+        log.write(earlier + "AppID 123 update started : download 0/100\n");
         manifest.write("\"BytesToDownload\" \"100\"\n\"BytesDownloaded\" \"37\"\n");
         log.close();
         manifest.close();
