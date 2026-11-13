@@ -66,6 +66,12 @@ cmake --build build --target OrbitShell --parallel
 
 На Linux пакеты CI включают Vosk и модели для русского и английского голосового ввода. В CI распознавание проверяется на аудиозаписи. Захват и позиционирование на Wayland зависят от порталов и протоколов композитора. Проверка на реальных рабочих столах продолжается.
 
+### Проверенные сборки
+
+- В Windows 10 22H2 x64 проверены установка через графический мастер, первый запуск и удаление. На тестовой системе WebView2 уже был установлен.
+- Единый установщик проверен в CI на Windows x64 и ARM64. Для Ubuntu 24.04 в CI проверены установка, запуск и удаление пакетов x64 и ARM64. [Прогон сборки](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43362169190)
+- На Ubuntu/X11 проверены отрисовка вкладок и вставка в отдельный редактор через `Ctrl+Alt+Shift+V`. На Wayland проверен запуск под Weston. Для вставки на Wayland используйте обычную команду вставки редактора. [Проверка X11](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43362869859)
+
 ### Установщики WebView Preview
 
 [Скачать Windows EXE и Ubuntu DEB](https://github.com/TrashDokiDoki/Orbit-Native/releases/tag/v0.3.0-shell-preview).
