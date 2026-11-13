@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Orbit Native
+Name=Orbit Native (Qt Widgets)
 Comment=Desktop island and launcher
 Exec=OrbitNative
 Icon=orbit-native

@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=Orbit Native WebView Preview
-Comment=Preview of the original Orbit interface
+Name=Orbit Native
+Comment=Desktop island with media controls, weather and shortcuts
+Comment[ru]=Настраиваемый островок с плеером, погодой и ярлыками
 Exec=OrbitShell
 Icon=orbit-native-shell
 Terminal=false
