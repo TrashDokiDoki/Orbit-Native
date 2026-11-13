@@ -25,6 +25,7 @@
   "shape": "capsule",
   "autohide": false,
   "hideFullscreen": true,
+  "showInCapture": false,
   "clipboard": false,
   "shortcut": "Alt+Space",
   "items": [

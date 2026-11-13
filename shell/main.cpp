@@ -937,6 +937,8 @@ private:
         const auto extra = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (extra & ~WS_EX_APPWINDOW) | WS_EX_TOOLWINDOW);
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        if (!setCaptureVisibility(settings_.value("showInCapture").toBool()))
+            qWarning("Orbit: SetWindowDisplayAffinity failed (%lu)", GetLastError());
 #elif defined(Q_OS_LINUX)
         auto *window = GTK_WINDOW(webview_get_window(main_));
         gtk_window_set_decorated(window, FALSE);
@@ -955,6 +957,17 @@ private:
         auto *browser = WEBKIT_WEB_VIEW(webview_get_native_handle(main_, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
         GdkRGBA background{0, 0, 0, 0};
         if (browser) webkit_web_view_set_background_color(browser, &background);
+#endif
+    }
+
+    bool setCaptureVisibility(bool show)
+    {
+#ifdef Q_OS_WIN
+        const auto window = static_cast<HWND>(webview_get_window(main_));
+        return SetWindowDisplayAffinity(window, show ? WDA_NONE : WDA_EXCLUDEFROMCAPTURE);
+#else
+        Q_UNUSED(show);
+        return true;
 #endif
     }
 
@@ -1714,7 +1727,7 @@ private:
         }
         if (capturePending_ || !snapshot_.isEmpty()) { done(error(QStringLiteral("Редактор уже открыт"))); return; }
         capturePending_ = true;
-        visible(main_, false);
+        if (!settings_.value("showInCapture").toBool()) visible(main_, false);
         QTimer::singleShot(testing_ ? 0 : 220, this, [this, mode, done] {
 #ifdef Q_OS_LINUX
             if ((!testing_ && QGuiApplication::platformName().startsWith("wayland")) ||
@@ -1777,6 +1790,7 @@ private:
             done(error(QStringLiteral("Не удалось открыть редактор")));
             return;
         }
+        visible(main_, false);
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(editor_));
         auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
@@ -2164,13 +2178,21 @@ private:
                 if (incoming.contains(i.key()) && incoming.value(i.key()).type() == i.value().type()) i.value() = incoming.value(i.key());
             }
             const bool autostartChanged = previous.value("autostart") != settings_.value("autostart");
+            const bool captureVisibilityChanged = previous.value("showInCapture") != settings_.value("showInCapture");
+            if (captureVisibilityChanged && !setCaptureVisibility(settings_.value("showInCapture").toBool())) {
+                settings_ = previous;
+                respond(error(QStringLiteral("Не удалось изменить видимость при захвате экрана")));
+                return;
+            }
             if (autostartChanged && !setAutostart(settings_.value("autostart").toBool())) {
+                if (captureVisibilityChanged) setCaptureVisibility(previous.value("showInCapture").toBool());
                 settings_ = previous;
                 respond(error(QStringLiteral("Не удалось изменить автозапуск")));
                 return;
             }
             if (!persist()) {
                 if (autostartChanged) setAutostart(previous.value("autostart").toBool());
+                if (captureVisibilityChanged) setCaptureVisibility(previous.value("showInCapture").toBool());
                 settings_ = previous;
                 respond(error(QStringLiteral("Не удалось сохранить настройки")));
                 return;

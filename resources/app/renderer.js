@@ -963,6 +963,7 @@ setInterval(() => { if (open) refreshHapp(); }, 3500);
 function applyPlatformLabels() {
   if (systemLabel !== 'Linux') return;
   $('dictation-hint').textContent = 'Офлайн · русский и английский';
+  $('tg-pick').textContent = 'Выбрать файл';
   $('zapret-description').textContent = 'Управление установленной службой systemd.';
   $('zapret-install-hint').textContent = 'Установите службу zapret.service. Для переключения могут потребоваться системные права.';
   document.querySelector('[data-system="vpn"]').textContent = 'VPN системы';

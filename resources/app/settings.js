@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const api = window.orbit;
 const fields = ['accent','theme','character','shape','position','top','scale','opacity','shortcut','monitor','musicCharacter','musicMode','hoverDelay','leaveDelay','eventDuration','restrictedApps','ruleMode'];
-const toggles = ['autostart','hover','collapseOnLeave','autohide','hideFullscreen','clipboard','clickThrough','rainAlerts','gpuAcceleration'];
+const toggles = ['autostart','hover','collapseOnLeave','autohide','hideFullscreen','showInCapture','clipboard','clickThrough','rainAlerts','gpuAcceleration'];
 let settings;
 let previewReaction = 'idle';
 let pendingSection = { section: 'general' };
@@ -189,6 +189,9 @@ api.onLauncherAdded(items => { items.forEach(item => addEntry(item)); });
 $('preview-clock').textContent = new Date().toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
 run(api.get(), result => {
   settings = result.settings;
+  if (result.platform === 'linux') {
+    $('capture-visibility-hint').textContent = 'Управляет снимками внутри Orbit. Запись и демонстрация экрана зависят от программы захвата и рабочего стола.';
+  }
   $('version').textContent = 'Версия ' + result.version;
   $('monitor').replaceChildren(...result.displays.map(display => {
     const option = element('option', display.label);
