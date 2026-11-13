@@ -137,7 +137,7 @@ jobs:
           mkdir -p "$XDG_CONFIG_HOME/xdg-desktop-portal-wlr"
           printf '[screencast]\nchooser_type=none\noutput_name=HEADLESS-1\n' > "$XDG_CONFIG_HOME/xdg-desktop-portal-wlr/config"
           printf 'xwayland disable\noutput HEADLESS-1 mode 1280x960\n' > "$XDG_CONFIG_HOME/sway.conf"
-          pipewire > "$RUNNER_TEMP/orbit-pipewire.log" 2>&1 &
+          PIPEWIRE_DEBUG=2 pipewire > "$RUNNER_TEMP/orbit-pipewire.log" 2>&1 &
           pipewire_pid=$!
           sway -c "$XDG_CONFIG_HOME/sway.conf" > "$RUNNER_TEMP/orbit-sway.log" 2>&1 &
           compositor=$!
@@ -175,8 +175,13 @@ jobs:
           done
           cat "$RUNNER_TEMP/orbit-record.log"
           grep -q 'record button ready' "$RUNNER_TEMP/orbit-record.log"
+          # Follow port changes while the WebKit consumer is still connected.
+          timeout 8s pw-dump -m > "$RUNNER_TEMP/orbit-pipewire-state.json" &
+          monitor=$!
           wtype -s 400 -k Return
           if ! wait "$recorder"; then
+            kill "$monitor" 2>/dev/null || true
+            jq -c '[.[] | select(.type == "PipeWire:Interface:Port") | {id, props: (.info.props | with_entries(select(.key | test("^(node.id|port.direction|port.name)$")))), formats: .info.params.EnumFormat}]' "$RUNNER_TEMP/orbit-pipewire-state.json" || true
             cat "$RUNNER_TEMP/orbit-record.log"
             exit 1
           fi
