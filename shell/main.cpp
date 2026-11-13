@@ -1906,10 +1906,15 @@ private:
         return true;
     }
 
-    QJsonValue saveRecording()
+    QJsonValue saveRecording(bool externallyWritten = false)
     {
         auto input = std::move(recordFile_);
-        if (!input || !input->size() || !input->flush() || !input->seek(0))
+        if (!input) return error(QStringLiteral("Запись экрана пуста"));
+        QFile externalInput(input->fileName());
+        if (externallyWritten && !externalInput.open(QIODevice::ReadOnly))
+            return error(QStringLiteral("Не удалось открыть записанный файл"));
+        QFile &source = externallyWritten ? externalInput : *input;
+        if ((!externallyWritten && !input->flush()) || !source.size() || !source.seek(0))
             return error(QStringLiteral("Запись экрана пуста"));
         const QDir videos(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
         const auto filename = "Orbit-" + QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss") + '.' + recordExtension_;
@@ -1925,8 +1930,8 @@ private:
         if (path.isEmpty()) return QJsonObject{{"saved", false}};
         QSaveFile output(path);
         if (!output.open(QIODevice::WriteOnly)) return error(QStringLiteral("Не удалось открыть файл для записи"));
-        while (!input->atEnd()) {
-            const auto chunk = input->read(1024 * 1024);
+        while (!source.atEnd()) {
+            const auto chunk = source.read(1024 * 1024);
             if (chunk.isEmpty() || output.write(chunk) != chunk.size())
                 return error(QStringLiteral("Не удалось сохранить запись"));
         }
@@ -1992,7 +1997,7 @@ private:
                     auto *portal = std::exchange(waylandPortal_, nullptr);
                     portal->deleteLater();
                     if (!failure.isEmpty()) recordFile_.reset();
-                    const auto result = failure.isEmpty() ? saveRecording() : QJsonValue(error(failure));
+                    const auto result = failure.isEmpty() ? saveRecording(true) : QJsonValue(error(failure));
                     recording_ = false;
                     refreshMemoryTarget();
                     emitTo(main_, "wayland-recording-finished", result);

@@ -71,7 +71,7 @@ void PortalScreencast::selectSource()
                     const auto streams = data.value("streams");
                     if (streams.metaType() != QMetaType::fromType<QDBusArgument>())
                         return finish({}, portalError(2));
-                    auto stream = streams.value<QDBusArgument>();
+                    const auto stream = streams.value<QDBusArgument>();
                     if (stream.currentSignature() != "a(ua{sv})") return finish({}, portalError(2));
                     stream.beginArray();
                     uint node = 0;
