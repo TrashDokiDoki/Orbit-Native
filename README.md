@@ -69,8 +69,8 @@ cmake --build build --target OrbitShell --parallel
 ### Проверенные сборки
 
 - В Windows 10 22H2 x64 проверены установка через графический мастер, первый запуск и удаление. На тестовой системе WebView2 уже был установлен.
-- Единый установщик проверен в CI на Windows x64 и ARM64. Для Ubuntu 24.04 в CI проверены установка, запуск и удаление пакетов x64 и ARM64. [Прогон сборки](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43362169190)
-- На Ubuntu/X11 проверены отрисовка вкладок и вставка в отдельный редактор через `Ctrl+Alt+Shift+V`. На Wayland проверен запуск под Weston. Для вставки на Wayland используйте обычную команду вставки редактора. [Проверка X11](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43362869859)
+- Единый установщик проверен в CI на Windows x64 и ARM64. Для Ubuntu 24.04 в CI проверены установка, запуск и удаление пакетов x64 и ARM64. [Прогон сборки](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43370178898)
+- На Ubuntu/X11 проверены отрисовка вкладок и вставка в отдельный редактор через `Ctrl+Alt+Shift+V`. На Wayland проверены запуск под Weston и снимок в Sway через системный портал с открытием в редакторе и копированием в буфер. [Проверка снимка](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43370178898/job/131703856091) Для вставки на Wayland используйте обычную команду вставки редактора. [Проверка X11](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43362869859)
 
 ### Установщики WebView Preview
 
@@ -86,4 +86,4 @@ WebView Preview добавлен в меню приложений отдельн
 
 В [workflow оболочки](https://github.com/TrashDokiDoki/Orbit-Native/actions/workflows/shell.yml) можно скачать установщик `OrbitNative-<версия>-Windows.exe` из артефакта `OrbitShell-windows-installer-universal`. Он выбирает x64 или ARM64, устанавливает приложение для текущего пользователя и включает Tesseract с русским и английским языками. Если в системе отсутствует WebView2, для его автоматической установки потребуется интернет.
 
-Для Ubuntu 24.04 доступны `OrbitShell-linux-installer-x64` и `OrbitShell-linux-installer-arm64`. Распакуйте архив артефакта и откройте файл `.deb` в менеджере пакетов. Он установит зависимости из репозиториев Ubuntu. В CI проверяются установка, запуск и удаление пакета на обеих архитектурах. Поддержка других дистрибутивов этой проверкой не покрывается.
+Для Ubuntu 24.04 доступны `OrbitShell-linux-installer-x64` и `OrbitShell-linux-installer-arm64`. Распакуйте архив артефакта и откройте файл `.deb` в менеджере пакетов. Он установит зависимости из репозиториев Ubuntu, включая системный портал и модуль PipeWire для захвата. В CI проверяются установка, запуск и удаление пакета на обеих архитектурах. Поддержка других дистрибутивов этой проверкой не покрывается.

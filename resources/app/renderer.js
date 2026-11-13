@@ -561,7 +561,10 @@ async function toggleRecord() {
     recordStart = 0;
     mediaRecorder = null;
     mediaStream = null;
-    message('Не удалось начать запись: ' + error.message);
+    const detail = systemLabel === 'Linux' && error.name === 'OverconstrainedError'
+      ? 'Рабочий стол не предоставил видеопоток. Проверь доступность записи экрана в текущем сеансе.'
+      : error.message;
+    message('Не удалось начать запись: ' + detail);
   } finally {
     recordStarting = false;
   }
