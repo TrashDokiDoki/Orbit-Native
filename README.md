@@ -2,11 +2,11 @@
 
 ![Orbit Native 0.2.0: островок, главная, погода, полка, заметки, таймер, напоминания, буфер и инструменты](docs/orbit-native-demo.gif)
 
-Экспериментальный перенос [Orbit](https://github.com/TrashDokiDoki/Orbit) на C++17 и Qt Widgets для Windows и Linux. Нативная сборка использует виджеты Qt и не запускает Electron, Node.js, браузерный движок или PowerShell. История исходного проекта сохранена в репозитории. Старый интерфейс находится в `resources/app`; нативная цель использует оттуда только изображения.
+Orbit Native переносит интерфейс и функции [Orbit](https://github.com/TrashDokiDoki/Orbit) на Windows и Linux. Основная сборка использует C++ и Qt для системных функций, WebView2 на Windows и WebKitGTK на Linux для отрисовки. Ниже описаны текущая сборка и архивная версия Qt Widgets, показанная в GIF.
 
-## Установка
+## Архивная версия Qt Widgets
 
-В [Releases](https://github.com/TrashDokiDoki/Orbit-Native/releases) публикуются два пакета x64. На Windows запустите `OrbitNative-0.2.0-windows-x64.exe`. На Ubuntu 24.04 установите `orbit-native_0.2.0_amd64.deb` командой `sudo apt install ./orbit-native_0.2.0_amd64.deb`. Откройте Orbit Native из меню приложений. Совместимость с другими дистрибутивами зависит от версий Qt и системных библиотек.
+Архивные пакеты версии 0.2.0 для Windows и Ubuntu x64 доступны в [Releases](https://github.com/TrashDokiDoki/Orbit-Native/releases). Инструкции для актуальной оболочки приведены в разделе [«Установщики WebView Preview»](#установщики-webview-preview).
 
 ## Что доступно
 
