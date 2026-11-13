@@ -420,6 +420,23 @@ jobs:
           $dest = Join-Path $env:RUNNER_TEMP 'OrbitUniversalSmoke'
           $setup = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$dest") -WindowStyle Hidden -Wait -PassThru
           if ($setup.ExitCode -ne 0) { throw "Installer exit code $($setup.ExitCode)" }
+          $runtimeKey = 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $runtimeFound = $false
+          foreach ($hive in [Microsoft.Win32.RegistryHive]::LocalMachine, [Microsoft.Win32.RegistryHive]::CurrentUser) {
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($hive, [Microsoft.Win32.RegistryView]::Registry32)
+            try {
+              $key = $base.OpenSubKey($runtimeKey)
+              if ($key) {
+                try {
+                  $version = [version]'0.0.0.0'
+                  if ([version]::TryParse([string]$key.GetValue('pv'), [ref]$version) -and $version -gt [version]'0.0.0.0') {
+                    $runtimeFound = $true
+                  }
+                } finally { $key.Dispose() }
+              }
+            } finally { $base.Dispose() }
+          }
+          if (!$runtimeFound) { throw 'WebView2 Runtime registration is missing after installation' }
           $exe = Join-Path $dest 'orbit-app/bin/OrbitShell.exe'
           $pe = [IO.File]::ReadAllBytes($exe)
           $header = [BitConverter]::ToInt32($pe, 0x3c)
