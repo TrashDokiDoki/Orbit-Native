@@ -69,7 +69,7 @@ jobs:
           grep -Fx 'Exec=OrbitShell' "$desktop"
           grep -Fx 'Terminal=false' "$desktop"
           dpkg-query -W xdg-desktop-portal gstreamer1.0-pipewire
-          for element in pipewiresrc uritranscodebin webmmux vp8enc pulsesrc opusenc; do
+          for element in pipewiresrc uritranscodebin webmmux vp8enc pulsesrc opusenc videoconvert audioconvert audioresample; do
             gst-inspect-1.0 "$element" >/dev/null
           done
           gst-inspect-1.0 pipewiresrc | grep -F 'keepalive-time'
