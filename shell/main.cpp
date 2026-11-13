@@ -742,12 +742,17 @@ private:
                 });
             )JS");
         } else if (testing_ && page == "capture.html") {
+            if (qEnvironmentVariableIsSet("ORBIT_TEST_WAYLAND_DESKTOP")) {
+                webview_init(window, "window.orbitTestWaylandDesktop = true;");
+            }
             webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', () => {
                   orbit.onCapture(async () => {
                     const canvas = document.querySelector('canvas');
-                    for (let i=0; i<30 && canvas.width!==96; i++) await new Promise(resolve=>setTimeout(resolve,50));
-                    const decoded = canvas.width === 96 && canvas.height === 64;
+                    const width = window.orbitTestWaylandDesktop ? 1280 : 96;
+                    const height = window.orbitTestWaylandDesktop ? 960 : 64;
+                    for (let i=0; i<60 && canvas.width!==width; i++) await new Promise(resolve=>setTimeout(resolve,50));
+                    const decoded = canvas.width === width && canvas.height === height;
                     const color = await orbit.color('#7856aa');
                     const copied = await orbit.captureResult({action:'copy',data:canvas.toDataURL('image/png')});
                     window.orbitShellTest(decoded && color === true && copied?.ok === true && typeof window.jsQR === 'function');

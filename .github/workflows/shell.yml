@@ -95,6 +95,36 @@ jobs:
             trap "kill $fixture" EXIT
             ORBIT_TEST_PORTAL=1 OrbitShell --smoke-test
           '
+      - name: Capture a real Wayland output through the system portal
+        if: matrix.arch == 'x64'
+        run: |
+          sudo apt-get install -y sway xdg-desktop-portal-wlr grim
+          dbus-run-session -- bash -euo pipefail <<'EOF'
+          export XDG_RUNTIME_DIR="$(mktemp -d)"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          export XDG_CONFIG_HOME="$XDG_RUNTIME_DIR/config"
+          export XDG_CURRENT_DESKTOP=sway XDG_SESSION_TYPE=wayland
+          export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 WLR_HEADLESS_OUTPUTS=1
+          mkdir -p "$XDG_CONFIG_HOME/xdg-desktop-portal"
+          printf '[preferred]\ndefault=wlr\n' > "$XDG_CONFIG_HOME/xdg-desktop-portal/sway-portals.conf"
+          printf 'output HEADLESS-1 mode 1280x960\n' > "$XDG_CONFIG_HOME/sway.conf"
+          sway -c "$XDG_CONFIG_HOME/sway.conf" > "$RUNNER_TEMP/orbit-sway.log" 2>&1 &
+          compositor=$!
+          trap 'kill "$compositor" 2>/dev/null || true; cat "$RUNNER_TEMP/orbit-sway.log"' EXIT
+          for attempt in {1..40}; do
+            for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
+              if test -S "$socket"; then
+                export WAYLAND_DISPLAY="${socket##*/}"
+                break 2
+              fi
+            done
+            sleep .25
+          done
+          test -n "${WAYLAND_DISPLAY:-}"
+          dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR XDG_CONFIG_HOME
+          export QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland
+          ORBIT_TEST_PORTAL=1 ORBIT_TEST_WAYLAND_DESKTOP=1 timeout 60s OrbitShell --smoke-test
+          EOF
       - name: Remove the Debian package
         run: |
           sudo apt-get remove -y orbit-native-shell
