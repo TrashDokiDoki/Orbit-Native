@@ -650,9 +650,10 @@ private:
                         document.querySelector('#record-audio').checked = false;
                         let stopping = false;
                         const poll = setInterval(() => {
-                            if (message.textContent.startsWith('Не удалось начать запись')) {
+                            if (message.textContent.startsWith('Не удалось начать запись') ||
+                                status.textContent === 'Источник экрана не передал данные для записи.') {
                                 clearInterval(poll);
-                                orbitShellTest(false, {error: message.textContent});
+                                orbitShellTest(false, {error: message.textContent || status.textContent});
                             } else if (!stopping && status.textContent.startsWith('Идёт запись')) {
                                 stopping = true;
                                 setTimeout(() => button.click(), 2200);

@@ -488,6 +488,7 @@ async function toggleRecord() {
   const streamWriter = api.recordStream;
   let saveQueue = Promise.resolve();
   let recordError;
+  let firstFrameTimeout;
   try {
     if (!navigator.mediaDevices?.getDisplayMedia) throw Error('Этот сеанс не поддерживает запись экрана.');
     const wantsAudio = $('record-audio').checked;
@@ -506,6 +507,7 @@ async function toggleRecord() {
     }
     mediaRecorder.ondataavailable = ({data}) => {
       if (!data.size || recordError) return;
+      clearTimeout(firstFrameTimeout);
       if (!streamWriter) {
         recordChunks.push(data);
         return;
@@ -520,6 +522,7 @@ async function toggleRecord() {
       });
     };
     mediaRecorder.onstop = async () => {
+      clearTimeout(firstFrameTimeout);
       mediaStream.getTracks().forEach(track => track.stop());
       recordStart = 0;
       $('record-label').textContent = 'Запись экрана';
@@ -548,6 +551,11 @@ async function toggleRecord() {
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
     };
     mediaRecorder.start(1000);
+    firstFrameTimeout = setTimeout(() => {
+      if (mediaRecorder?.state !== 'recording') return;
+      recordError = Error('Источник экрана не передал данные для записи.');
+      mediaRecorder.stop();
+    }, 10000);
     recordStart = Date.now();
     await api.recordState(true);
     $('record-label').textContent = 'Остановить запись';
@@ -556,6 +564,7 @@ async function toggleRecord() {
       ' · нажми ещё раз для сохранения';
     message('');
   } catch (error) {
+    clearTimeout(firstFrameTimeout);
     mediaStream?.getTracks().forEach(track => track.stop());
     await streamWriter?.discard();
     recordStart = 0;
