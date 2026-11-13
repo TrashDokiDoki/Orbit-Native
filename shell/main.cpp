@@ -73,6 +73,8 @@
 #include <QDBusMessage>
 #include <QDBusPendingCall>
 #include <gtk/gtk.h>
+#include <gdk/gdkwayland.h>
+#include <gdk/gdkx.h>
 #include <gtk-layer-shell.h>
 #include <gio/gdesktopappinfo.h>
 #include <webkit2/webkit2.h>
@@ -147,6 +149,9 @@ public:
 #ifdef Q_OS_LINUX
         if (!gtk_init_check(nullptr, nullptr)) return 2;
         mainGtkWindow_ = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        auto *display = gtk_widget_get_display(mainGtkWindow_);
+        wayland_ = GDK_IS_WAYLAND_DISPLAY(display);
+        x11_ = GDK_IS_X11_DISPLAY(display);
         if (auto *visual = gdk_screen_get_rgba_visual(gtk_widget_get_screen(mainGtkWindow_)))
             gtk_widget_set_visual(mainGtkWindow_, visual);
         gtk_widget_set_app_paintable(mainGtkWindow_, TRUE);
@@ -192,9 +197,9 @@ public:
         if (!testing_ || qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) media_.refresh();
         if (!testing_) {
 #ifdef Q_OS_LINUX
-            if (QGuiApplication::platformName().startsWith("wayland"))
+            if (wayland_)
                 portalShortcuts_ = std::make_unique<PortalShortcuts>(this);
-            else x11Input_ = std::make_unique<X11Input>();
+            else if (x11_) x11Input_ = std::make_unique<X11Input>();
 #endif
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
@@ -1213,7 +1218,7 @@ private:
         }
         if (!SetWindowRgn(hwnd, region, TRUE)) DeleteObject(region);
 #elif defined(Q_OS_LINUX)
-        if (QGuiApplication::platformName() != "xcb") return;
+        if (!x11_) return;
         auto *surface = gtk_widget_get_window(mainGtkWindow_);
         if (!surface) return;
         const int left = qRound(metrics.value("x").toDouble() * lastScale_);
@@ -1330,7 +1335,7 @@ private:
         auto hwnd = static_cast<HWND>(webview_get_window(main_));
         if (lastWindowSize_ != size) SetWindowRgn(hwnd, nullptr, TRUE);
 #elif defined(Q_OS_LINUX)
-        if (lastWindowSize_ != size && QGuiApplication::platformName() == "xcb") {
+        if (lastWindowSize_ != size && x11_) {
             if (auto *surface = gtk_widget_get_window(mainGtkWindow_))
                 gdk_window_shape_combine_region(surface, nullptr, 0, 0);
         }
@@ -2070,7 +2075,7 @@ private:
         if (!settings_.value("showInCapture").toBool()) visible(main_, false);
         QTimer::singleShot(testing_ ? 0 : 220, this, [this, mode, done] {
 #ifdef Q_OS_LINUX
-            if ((!testing_ && QGuiApplication::platformName().startsWith("wayland")) ||
+            if ((!testing_ && wayland_) ||
                 (testing_ && qEnvironmentVariableIsSet("ORBIT_TEST_PORTAL"))) {
                 portalScreenshot(this, [this, mode, done](QImage image, const QString &issue) {
                     if (!issue.isEmpty()) {
@@ -2487,7 +2492,7 @@ private:
             }
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
                     {"systemLabel", system}, {"platform", system == "Windows" ? "win32" : "linux"},
-                    {"waylandRecording", system == "Linux" && QGuiApplication::platformName().startsWith("wayland")},
+                    {"waylandRecording", wayland_},
                     {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_},
                     {"steamDownload", steamDownload_}});
             if (window == preferences_) {
@@ -2565,7 +2570,7 @@ private:
             weather(first.toString(), respond);
 #ifdef Q_OS_LINUX
         } else if (command == "wayland-record-start" && window == main_ &&
-                   QGuiApplication::platformName().startsWith("wayland")) {
+                   wayland_) {
             startWaylandRecording(first.toBool(), respond);
         } else if (command == "wayland-record-stop" && window == main_ && recording_ && waylandPortal_) {
             QTimer::singleShot(0, this, [this] { waylandEncoder_.stop(); });
@@ -2791,6 +2796,10 @@ private:
     bool mini_ = false;
     bool musicPlaying_ = false;
     bool gpuEnabled_ = true;
+    bool wayland_ = false;
+#ifdef Q_OS_LINUX
+    bool x11_ = false;
+#endif
     bool recording_ = false;
     QString recordExtension_;
     std::unique_ptr<QTemporaryFile> recordFile_;
