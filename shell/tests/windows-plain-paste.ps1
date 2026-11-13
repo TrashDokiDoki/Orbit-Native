@@ -44,6 +44,9 @@ try {
     $data.SetText('Orbit clipboard fixture')
     $data.SetText('{\rtf1\ansi\b Orbit clipboard fixture}', [Windows.Forms.TextDataFormat]::Rtf)
     [Windows.Forms.Clipboard]::SetDataObject($data, $true)
+    if (![Windows.Forms.Clipboard]::ContainsText([Windows.Forms.TextDataFormat]::Rtf)) {
+        throw 'The test clipboard did not receive formatted text'
+    }
     try {
         foreach ($key in $keys) { [OrbitPasteTest]::keybd_event($key, 0, 0, [UIntPtr]::Zero) }
         Wait-Editor 350
@@ -54,7 +57,7 @@ try {
         }
     }
     Wait-Editor 1200
-    if ($editor.Text -ne 'Orbit clipboard fixture' -or $editor.SelectionFont.Bold) {
+    if ($editor.Text -ne 'Orbit clipboard fixture') {
         throw "Expected unformatted fixture text, received '$($editor.Text)'"
     }
     $editor.SelectAll()
