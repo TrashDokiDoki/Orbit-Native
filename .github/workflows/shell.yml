@@ -85,7 +85,12 @@ jobs:
             sleep .25
           done
           test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
-          QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland timeout 60s dbus-run-session -- OrbitShell --smoke-test
+          QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland timeout 60s dbus-run-session -- bash -e -c '
+            /usr/bin/python3 shell/tests/mpris_fixture.py "file://$PWD/resources/app/icon.png" &
+            fixture=$!
+            trap "kill $fixture" EXIT
+            ORBIT_TEST_PORTAL=1 OrbitShell --smoke-test
+          '
       - name: Remove the Debian package
         run: |
           sudo apt-get remove -y orbit-native-shell
