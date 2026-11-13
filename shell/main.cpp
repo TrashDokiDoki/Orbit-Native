@@ -24,7 +24,6 @@
 #include <QImageReader>
 #include <QHostAddress>
 #include <QProcess>
-#include <QRegularExpression>
 #include <QTemporaryFile>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -35,6 +34,7 @@
 #include <QSaveFile>
 #include <QScreen>
 #include <QSettings>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QSysInfo>
 #include <QSystemTrayIcon>
@@ -2042,6 +2042,14 @@ private:
     void weather(const QString &city, const Respond &done)
     {
         if (testing_) { done(error("Network disabled in smoke test")); return; }
+        const auto name = city.section(',', 0, 0).simplified();
+        if (name.compare(QStringLiteral("Красная Горбатка"), Qt::CaseInsensitive) == 0 ||
+            name.compare(QStringLiteral("Красная Горбака"), Qt::CaseInsensitive) == 0) {
+            weatherForecast({{"name", QStringLiteral("Красная Горбатка")},
+                {"admin1", QStringLiteral("Владимирская область")}, {"country", QStringLiteral("Россия")},
+                {"latitude", 55.87701}, {"longitude", 41.75508}}, done);
+            return;
+        }
         QUrl geo("https://geocoding-api.open-meteo.com/v1/search");
         QUrlQuery params;
         params.setQueryItems({{"name", city.left(80)}, {"count", "1"}, {"language", "ru"}});
@@ -2051,19 +2059,23 @@ private:
             if (result.contains("error")) { done(result); return; }
             const auto places = result.value("results").toArray();
             if (places.isEmpty()) { done(error(QStringLiteral("Город не найден"))); return; }
-            const auto place = places.first().toObject();
-            QUrl forecast("https://api.open-meteo.com/v1/forecast");
-            QUrlQuery query;
-            query.setQueryItems({{"latitude", QString::number(place.value("latitude").toDouble())},
-                {"longitude", QString::number(place.value("longitude").toDouble())}, {"timezone", "auto"}, {"forecast_days", "7"},
-                {"wind_speed_unit", "ms"},
-                {"current", "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,surface_pressure,is_day,precipitation"},
-                {"hourly", "temperature_2m,weather_code,is_day,precipitation_probability,precipitation,dew_point_2m,surface_pressure,uv_index"},
-                {"daily", "temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset,precipitation_sum,uv_index_max"}});
-            forecast.setQuery(query);
-            request(forecast, [place, done](QJsonValue data) {
-                done(data.toObject().contains("error") ? data : QJsonValue(QJsonObject{{"location", place}, {"forecast", data}}));
-            });
+            weatherForecast(places.first().toObject(), done);
+        });
+    }
+
+    void weatherForecast(const QJsonObject &place, const Respond &done)
+    {
+        QUrl forecast("https://api.open-meteo.com/v1/forecast");
+        QUrlQuery query;
+        query.setQueryItems({{"latitude", QString::number(place.value("latitude").toDouble())},
+            {"longitude", QString::number(place.value("longitude").toDouble())}, {"timezone", "auto"}, {"forecast_days", "7"},
+            {"wind_speed_unit", "ms"},
+            {"current", "temperature_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,relative_humidity_2m,surface_pressure,is_day,precipitation"},
+            {"hourly", "temperature_2m,weather_code,is_day,precipitation_probability,precipitation,dew_point_2m,surface_pressure,uv_index"},
+            {"daily", "temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset,precipitation_sum,uv_index_max"}});
+        forecast.setQuery(query);
+        request(forecast, [place, done](QJsonValue data) {
+            done(data.toObject().contains("error") ? data : QJsonValue(QJsonObject{{"location", place}, {"forecast", data}}));
         });
     }
 
