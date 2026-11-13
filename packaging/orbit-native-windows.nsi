@@ -27,6 +27,8 @@ LangString Unsupported ${LANG_ENGLISH} "Orbit Native requires 64-bit Windows 10 
 LangString Unsupported ${LANG_RUSSIAN} "Для Orbit Native нужна 64-битная Windows 10 версии 1809 или новее либо Windows 11."
 LangString WebViewFailed ${LANG_ENGLISH} "Connect to the internet and run the installer again to install Microsoft WebView2."
 LangString WebViewFailed ${LANG_RUSSIAN} "Подключитесь к интернету и снова запустите установщик для установки Microsoft WebView2."
+LangString WebViewInstalling ${LANG_ENGLISH} "Downloading and installing Microsoft WebView2. This may take a few minutes."
+LangString WebViewInstalling ${LANG_RUSSIAN} "Загружаем и устанавливаем Microsoft WebView2. Это может занять несколько минут."
 LangString ExistingFolder ${LANG_ENGLISH} "The installation folder already contains files from a different application."
 LangString ExistingFolder ${LANG_RUSSIAN} "В папке установки уже есть файлы другого приложения."
 
@@ -64,6 +66,7 @@ Function EnsureWebView
     Call ReadWebViewVersion
     ${If} $0 == ""
     ${OrIf} $0 == "0.0.0.0"
+        DetailPrint "$(WebViewInstalling)"
         InitPluginsDir
         SetOutPath "$PLUGINSDIR"
         File /oname=OrbitWebView2Setup.exe "${ORBIT_BOOTSTRAPPER}"
