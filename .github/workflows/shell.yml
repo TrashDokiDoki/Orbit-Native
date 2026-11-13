@@ -127,6 +127,10 @@ jobs:
           sed -i 's/xdpw_format_pw_from_drm_fourcc(\*format)/xdpw_format_pw_from_drm_fourcc(format->fourcc)/' "$pipewire_source"
           meson setup "$RUNNER_TEMP/orbit-wlr-build" "$RUNNER_TEMP/orbit-wlr-source"
           meson compile -C "$RUNNER_TEMP/orbit-wlr-build"
+          # Keep using the test PulseAudio server when Wayland gets a separate runtime directory.
+          PULSE_SERVER=$(LC_ALL=C pactl info | sed -n 's/^Server String: //p')
+          test -n "$PULSE_SERVER"
+          export PULSE_SERVER
           dbus-run-session -- bash -euo pipefail <<'EOF'
           export XDG_RUNTIME_DIR="$(mktemp -d)"
           chmod 700 "$XDG_RUNTIME_DIR"
@@ -184,6 +188,7 @@ jobs:
           export SWAYSOCK=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'sway-ipc.*.sock' -print -quit)
           test -S "$SWAYSOCK"
           sox -n -r 48000 -c 1 "$RUNNER_TEMP/orbit-test-tone.wav" synth 10 sine 440 vol 0.2
+          pactl get-default-sink | grep -Fx orbit_preview_test
           paplay --device=orbit_preview_test "$RUNNER_TEMP/orbit-test-tone.wav" &
           wtype -s 400 -k Return
           # Change the output itself, including the area outside Orbit's layer surface.
