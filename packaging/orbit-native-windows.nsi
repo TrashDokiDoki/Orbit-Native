@@ -76,23 +76,21 @@ Function EnsureWebView
             StrCpy $1 1
         ${EndIf}
         Delete "$PLUGINSDIR\OrbitWebView2Setup.exe"
-        ${If} $1 == 0
-            StrCpy $2 20
-            ${Do}
-                Call ReadWebViewVersion
-                ${If} $0 != ""
-                ${AndIf} $0 != "0.0.0.0"
-                    ${ExitDo}
-                ${EndIf}
-                ${If} $2 == 0
-                    ${ExitDo}
-                ${EndIf}
-                Sleep 250
-                IntOp $2 $2 - 1
-            ${Loop}
-        ${EndIf}
-        ${If} $1 != 0
-        ${OrIf} $0 == ""
+        DetailPrint "WebView2 installer exit code: $1"
+        StrCpy $2 20
+        ${Do}
+            Call ReadWebViewVersion
+            ${If} $0 != ""
+            ${AndIf} $0 != "0.0.0.0"
+                ${ExitDo}
+            ${EndIf}
+            ${If} $2 == 0
+                ${ExitDo}
+            ${EndIf}
+            Sleep 250
+            IntOp $2 $2 - 1
+        ${Loop}
+        ${If} $0 == ""
         ${OrIf} $0 == "0.0.0.0"
             MessageBox MB_ICONSTOP|MB_OK "$(WebViewFailed)" /SD IDOK
             SetErrorLevel 3
