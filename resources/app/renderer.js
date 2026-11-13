@@ -535,9 +535,13 @@ async function toggleRecord() {
       } else {
         const save = async () => streamWriter ? streamWriter.finish() :
           api.recordSave(await new Blob(recordChunks,{type:recordMime}).arrayBuffer(), recordMime);
-        const result = await run(save());
-        $('record-status').textContent = result?.saved ? 'Запись сохранена' :
-          result ? 'Сохранение отменено' : 'Не удалось сохранить запись';
+        try {
+          const result = await save();
+          if (result?.error) throw Error(result.error);
+          $('record-status').textContent = result?.saved ? 'Запись сохранена' : 'Сохранение отменено';
+        } catch (error) {
+          $('record-status').textContent = 'Не удалось сохранить запись: ' + error.message;
+        }
       }
       recordChunks = [];
       mediaRecorder = null;
