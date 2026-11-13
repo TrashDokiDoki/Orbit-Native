@@ -111,7 +111,7 @@ jobs:
           printf '[preferred]\ndefault=wlr\n' > "$XDG_CONFIG_HOME/xdg-desktop-portal/sway-portals.conf"
           mkdir -p "$XDG_CONFIG_HOME/xdg-desktop-portal-wlr"
           printf '[screencast]\nchooser_type=none\noutput_name=HEADLESS-1\n' > "$XDG_CONFIG_HOME/xdg-desktop-portal-wlr/config"
-          printf 'output HEADLESS-1 mode 1280x960\n' > "$XDG_CONFIG_HOME/sway.conf"
+          printf 'xwayland disable\noutput HEADLESS-1 mode 1280x960\n' > "$XDG_CONFIG_HOME/sway.conf"
           pipewire > "$RUNNER_TEMP/orbit-pipewire.log" 2>&1 &
           pipewire_pid=$!
           sway -c "$XDG_CONFIG_HOME/sway.conf" > "$RUNNER_TEMP/orbit-sway.log" 2>&1 &
@@ -133,6 +133,12 @@ jobs:
           done
           test -S "$XDG_RUNTIME_DIR/pipewire-0"
           dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR XDG_CONFIG_HOME
+          wireplumber > "$RUNNER_TEMP/orbit-wireplumber.log" 2>&1 &
+          wireplumber_pid=$!
+          /usr/libexec/xdg-desktop-portal-wlr --loglevel DEBUG > "$RUNNER_TEMP/orbit-wlr.log" 2>&1 &
+          portal_pid=$!
+          trap 'kill "$compositor" "$pipewire_pid" "$wireplumber_pid" "$portal_pid" 2>/dev/null || true; cat "$RUNNER_TEMP"/orbit-{sway,pipewire,wireplumber,wlr}.log' EXIT
+          gdbus wait --session --timeout 10 org.freedesktop.impl.portal.desktop.wlr
           export QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland
           ORBIT_TEST_PORTAL=1 ORBIT_TEST_WAYLAND_DESKTOP=1 timeout 60s OrbitShell --smoke-test
           export ORBIT_TEST_RECORD_OUTPUT="$RUNNER_TEMP/orbit-wayland-recording"
