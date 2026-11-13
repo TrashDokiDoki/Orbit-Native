@@ -647,8 +647,6 @@ private:
                         const button = document.querySelector('#record-button');
                         const status = document.querySelector('#record-status');
                         const message = document.querySelector('#message');
-                        expand(true);
-                        showTab('tools');
                         document.querySelector('#record-audio').checked = false;
                         let stopping = false;
                         const poll = setInterval(() => {
@@ -664,7 +662,9 @@ private:
                             }
                         }, 100);
                         const focus = setInterval(() => {
-                            if (document.querySelector('#panel').inert || !document.hasFocus()) return;
+                            if (!state || !document.hasFocus()) return;
+                            if (document.querySelector('#panel').inert) { expand(true); return; }
+                            if (tab !== 'tools') showTab('tools');
                             button.focus();
                             if (document.activeElement !== button) return;
                             clearInterval(focus);
