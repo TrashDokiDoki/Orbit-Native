@@ -154,7 +154,9 @@ public:
             gtk_layer_set_namespace(window, "orbit-native");
             gtk_layer_set_layer(window, GTK_LAYER_SHELL_LAYER_TOP);
             gtk_layer_set_anchor(window, GTK_LAYER_SHELL_EDGE_TOP, TRUE);
-            gtk_layer_set_keyboard_mode(window, GTK_LAYER_SHELL_KEYBOARD_MODE_ON_DEMAND);
+            const bool recordingTest = testing_ && qEnvironmentVariableIsSet("ORBIT_TEST_RECORD_OUTPUT");
+            gtk_layer_set_keyboard_mode(window, recordingTest ? GTK_LAYER_SHELL_KEYBOARD_MODE_EXCLUSIVE :
+                                                              GTK_LAYER_SHELL_KEYBOARD_MODE_ON_DEMAND);
         }
         main_ = webview_create(false, mainGtkWindow_);
 #else
@@ -639,14 +641,46 @@ private:
                 std::fflush(stderr);
                 webview_return(static_cast<webview_t>(context), id, 0, "null");
             }, window);
-            const auto testProxy = qEnvironmentVariable("ORBIT_TEST_PROXY");
-            if (validProxyFile(testProxy)) {
-                settings_["proxyPath"] = testProxy;
-                webview_init(window, "window.orbitStrictProxyTest = true;");
-            }
-            if (qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) webview_init(window, "window.orbitStrictMediaTest = true;");
-            if (qEnvironmentVariableIsSet("ORBIT_TEST_AUDIO")) webview_init(window, "window.orbitStrictAudioTest = true;");
-            webview_init(window, R"JS(
+            if (qEnvironmentVariableIsSet("ORBIT_TEST_RECORD_OUTPUT")) {
+                webview_init(window, R"JS(
+                    document.addEventListener('DOMContentLoaded', () => {
+                        const button = document.querySelector('#record-button');
+                        const status = document.querySelector('#record-status');
+                        const message = document.querySelector('#message');
+                        expand(true);
+                        showTab('tools');
+                        document.querySelector('#record-audio').checked = false;
+                        let stopping = false;
+                        const poll = setInterval(() => {
+                            if (message.textContent.startsWith('Не удалось начать запись')) {
+                                clearInterval(poll);
+                                orbitShellTest(false, {error: message.textContent});
+                            } else if (!stopping && status.textContent.startsWith('Идёт запись')) {
+                                stopping = true;
+                                setTimeout(() => button.click(), 2200);
+                            } else if (stopping && status.textContent === 'Запись сохранена') {
+                                clearInterval(poll);
+                                orbitShellTest(true);
+                            }
+                        }, 100);
+                        const focus = setInterval(() => {
+                            if (document.querySelector('#panel').inert || !document.hasFocus()) return;
+                            button.focus();
+                            if (document.activeElement !== button) return;
+                            clearInterval(focus);
+                            orbitShellTrace('record button ready');
+                        }, 100);
+                    });
+                )JS");
+            } else {
+                const auto testProxy = qEnvironmentVariable("ORBIT_TEST_PROXY");
+                if (validProxyFile(testProxy)) {
+                    settings_["proxyPath"] = testProxy;
+                    webview_init(window, "window.orbitStrictProxyTest = true;");
+                }
+                if (qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) webview_init(window, "window.orbitStrictMediaTest = true;");
+                if (qEnvironmentVariableIsSet("ORBIT_TEST_AUDIO")) webview_init(window, "window.orbitStrictAudioTest = true;");
+                webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
                   const initial = await orbit.get();
                   await orbit.expand(true);
@@ -742,6 +776,7 @@ private:
                   }
                 });
             )JS");
+            }
         } else if (testing_ && page == "capture.html") {
             if (qEnvironmentVariableIsSet("ORBIT_TEST_WAYLAND_DESKTOP")) {
                 webview_init(window, "window.orbitTestWaylandDesktop = true;");
@@ -786,12 +821,18 @@ private:
         auto *browser = WEBKIT_WEB_VIEW(webview_get_native_handle(window, WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER));
         if (browser && island) {
             webkit_settings_set_enable_media_stream(webkit_web_view_get_settings(browser), TRUE);
+            if (testing_ && qEnvironmentVariableIsSet("ORBIT_TEST_RECORD_OUTPUT"))
+                g_object_set_data(G_OBJECT(browser), "orbit-record-test", GINT_TO_POINTER(1));
             auto *trustedUrl = g_strdup(address.constData());
             g_signal_connect_data(browser, "permission-request", G_CALLBACK(+[](WebKitWebView *view,
                 WebKitPermissionRequest *request, gpointer data) -> gboolean {
                 if (!WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request) ||
                     !webkit_user_media_permission_is_for_display_device(WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request)) ||
                     g_strcmp0(webkit_web_view_get_uri(view), static_cast<const gchar *>(data)) != 0) return FALSE;
+                if (g_object_get_data(G_OBJECT(view), "orbit-record-test")) {
+                    webkit_permission_request_allow(request);
+                    return TRUE;
+                }
                 auto *parent = GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(view)));
                 auto *dialog = gtk_message_dialog_new(parent, GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION,
                     GTK_BUTTONS_NONE, "%s", "Разрешить Orbit записывать экран?");
@@ -1865,12 +1906,13 @@ private:
             return error(QStringLiteral("Запись экрана пуста"));
         const QDir videos(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
         const auto filename = "Orbit-" + QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss") + '.' + recordExtension_;
+        const auto liveTestPath = testing_ ? qEnvironmentVariable("ORBIT_TEST_RECORD_OUTPUT") : QString();
         std::optional<QTemporaryDir> testOutput;
-        if (testing_) {
+        if (testing_ && liveTestPath.isEmpty()) {
             testOutput.emplace();
             if (!testOutput->isValid()) return error(QStringLiteral("Не удалось создать тестовую папку"));
         }
-        const auto path = testing_ ? QDir(testOutput->path()).filePath(filename) :
+        const auto path = !liveTestPath.isEmpty() ? liveTestPath : testOutput ? QDir(testOutput->path()).filePath(filename) :
             QFileDialog::getSaveFileName(nullptr, QStringLiteral("Сохранить запись Orbit"),
                                                       videos.filePath(filename), recordExtension_.toUpper() + " (*." + recordExtension_ + ')');
         if (path.isEmpty()) return QJsonObject{{"saved", false}};
@@ -1882,7 +1924,7 @@ private:
                 return error(QStringLiteral("Не удалось сохранить запись"));
         }
         if (!output.commit()) return error(QStringLiteral("Не удалось сохранить запись"));
-        if (testing_) {
+        if (testOutput) {
             QFile saved(path);
             if (!saved.open(QIODevice::ReadOnly) || saved.readAll() != QByteArray::fromHex("1a45dfa3"))
                 return error(QStringLiteral("Тестовая запись не совпадает с исходными данными"));

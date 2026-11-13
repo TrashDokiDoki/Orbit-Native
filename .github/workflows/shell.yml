@@ -100,7 +100,7 @@ jobs:
       - name: Capture a real Wayland output through the system portal
         if: matrix.arch == 'x64'
         run: |
-          sudo apt-get install -y sway xdg-desktop-portal-wlr grim
+          sudo apt-get install -y sway xdg-desktop-portal-wlr grim wtype ffmpeg
           dbus-run-session -- bash -euo pipefail <<'EOF'
           export XDG_RUNTIME_DIR="$(mktemp -d)"
           chmod 700 "$XDG_RUNTIME_DIR"
@@ -109,6 +109,8 @@ jobs:
           export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 WLR_HEADLESS_OUTPUTS=1
           mkdir -p "$XDG_CONFIG_HOME/xdg-desktop-portal"
           printf '[preferred]\ndefault=wlr\n' > "$XDG_CONFIG_HOME/xdg-desktop-portal/sway-portals.conf"
+          mkdir -p "$XDG_CONFIG_HOME/xdg-desktop-portal-wlr"
+          printf '[screencast]\nchooser_type=none\noutput_name=HEADLESS-1\n' > "$XDG_CONFIG_HOME/xdg-desktop-portal-wlr/config"
           printf 'output HEADLESS-1 mode 1280x960\n' > "$XDG_CONFIG_HOME/sway.conf"
           pipewire > "$RUNNER_TEMP/orbit-pipewire.log" 2>&1 &
           pipewire_pid=$!
@@ -133,6 +135,22 @@ jobs:
           dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR XDG_CONFIG_HOME
           export QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland
           ORBIT_TEST_PORTAL=1 ORBIT_TEST_WAYLAND_DESKTOP=1 timeout 60s OrbitShell --smoke-test
+          export ORBIT_TEST_RECORD_OUTPUT="$RUNNER_TEMP/orbit-wayland-recording"
+          timeout 30s OrbitShell --smoke-test > "$RUNNER_TEMP/orbit-record.log" 2>&1 &
+          recorder=$!
+          for attempt in {1..60}; do
+            if grep -q 'record button ready' "$RUNNER_TEMP/orbit-record.log"; then break; fi
+            sleep .2
+          done
+          cat "$RUNNER_TEMP/orbit-record.log"
+          grep -q 'record button ready' "$RUNNER_TEMP/orbit-record.log"
+          wtype -k Return
+          if ! wait "$recorder"; then
+            cat "$RUNNER_TEMP/orbit-record.log"
+            exit 1
+          fi
+          frames=$(ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of csv=p=0 "$ORBIT_TEST_RECORD_OUTPUT")
+          [[ "$frames" =~ ^[0-9]+$ ]] && (( frames >= 2 ))
           EOF
       - name: Remove the Debian package
         run: |
