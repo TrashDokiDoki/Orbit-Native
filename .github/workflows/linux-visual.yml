@@ -24,7 +24,7 @@ jobs:
       - name: Install the verified package and display tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick xcompmgr x11-xserver-utils pulseaudio
+          sudo apt-get install -y ./package/orbit-native-shell_*_amd64.deb xvfb xdotool imagemagick xcompmgr x11-xserver-utils pulseaudio openbox xclip python3-gi
       - name: Capture the compact island, main panel and preferences
         shell: bash
         run: |
@@ -92,6 +92,52 @@ jobs:
           sleep 1
           import -window "$settings" captures/settings.png
           identify captures/*.png
+          EOF
+      - name: Verify the global paste shortcut in a separate GTK editor
+        shell: bash
+        run: |
+          xvfb-run -a bash -euo pipefail <<'EOF'
+          export QT_QPA_PLATFORM=xcb GDK_BACKEND=x11
+          profile=$(mktemp -d)
+          export XDG_CONFIG_HOME="$profile/config" XDG_DATA_HOME="$profile/data" XDG_CACHE_HOME="$profile/cache"
+          export ORBIT_PASTE_RESULT="$profile/pasted.txt"
+          openbox > captures/window-manager.log 2>&1 &
+          wm=$!
+          OrbitShell > captures/paste-orbit.log 2>&1 &
+          orbit=$!
+          /usr/bin/python3 - <<'PY' &
+          import os
+          import gi
+          gi.require_version("Gtk", "3.0")
+          from gi.repository import Gtk
+
+          window = Gtk.Window(title="Orbit paste fixture")
+          editor = Gtk.TextView()
+          window.add(editor)
+          window.set_default_size(400, 200)
+          def save(buffer):
+              with open(os.environ["ORBIT_PASTE_RESULT"], "w", encoding="utf-8") as output:
+                  output.write(buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True))
+          editor.get_buffer().connect("changed", save)
+          window.show_all()
+          editor.grab_focus()
+          Gtk.main()
+          PY
+          editor=$!
+          trap 'kill "$editor" "$orbit" "$wm" 2>/dev/null || true' EXIT
+          timeout 20 xdotool search --sync --onlyvisible --name '^Orbit Native$' >/dev/null
+          target=$(timeout 15 xdotool search --sync --onlyvisible --name '^Orbit paste fixture$')
+          timeout 10 xdotool windowactivate --sync "$target"
+          printf 'Orbit clipboard fixture' | xclip -selection clipboard
+          xdotool keydown ctrl keydown alt keydown shift keydown v
+          sleep .35
+          test ! -s "$ORBIT_PASTE_RESULT"
+          xdotool keyup v keyup shift keyup alt keyup ctrl
+          for attempt in {1..20}; do
+            if [[ -s "$ORBIT_PASTE_RESULT" ]]; then break; fi
+            sleep .1
+          done
+          test "$(cat "$ORBIT_PASTE_RESULT")" = 'Orbit clipboard fixture'
           EOF
       - uses: actions/upload-artifact@v4
         if: always()
