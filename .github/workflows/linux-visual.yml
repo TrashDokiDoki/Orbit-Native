@@ -57,8 +57,13 @@ jobs:
           }
           xdotool mousemove 1 800
           island=$(wait_window '^Orbit Native$')
-          sleep 1
-          import -window root captures/compact.png
+          for _ in {1..20}; do
+            import -window root captures/compact.png
+            colors=$(identify -format '%k' captures/compact.png)
+            if (( colors > 10 )); then break; fi
+            sleep .25
+          done
+          (( colors > 10 ))
           xdotool mousemove --window "$island" 45 19
           for _ in {1..24}; do
             WIDTH=$(xdotool getwindowgeometry --shell "$island" | awk -F= '/^WIDTH=[0-9]+$/{print $2}')
