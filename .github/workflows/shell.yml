@@ -69,7 +69,7 @@ jobs:
           grep -Fx 'Exec=OrbitShell' "$desktop"
           grep -Fx 'Terminal=false' "$desktop"
           dpkg-query -W xdg-desktop-portal gstreamer1.0-pipewire
-          for element in pipewiresrc uritranscodebin webmmux vp8enc; do
+          for element in pipewiresrc uritranscodebin webmmux vp8enc pulsesrc opusenc; do
             gst-inspect-1.0 "$element" >/dev/null
           done
           gst-inspect-1.0 pipewiresrc | grep -F 'keepalive-time'
@@ -183,6 +183,8 @@ jobs:
           monitor=$!
           export SWAYSOCK=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'sway-ipc.*.sock' -print -quit)
           test -S "$SWAYSOCK"
+          sox -n -r 48000 -c 1 "$RUNNER_TEMP/orbit-test-tone.wav" synth 10 sine 440 vol 0.2
+          paplay --device=orbit_preview_test "$RUNNER_TEMP/orbit-test-tone.wav" &
           wtype -s 400 -k Return
           # Change the output itself, including the area outside Orbit's layer surface.
           for color in '#c74141' '#344acf' '#30813b' '#cf8234'; do
@@ -200,7 +202,10 @@ jobs:
             echo "Expected at least two decoded video frames, got: $frames" >&2
             exit 1
           fi
-          printf 'Decoded Wayland recording: %s video frames\n' "$frames"
+          ffmpeg -hide_banner -i "$ORBIT_TEST_RECORD_OUTPUT" -map 0:a:0 -af volumedetect -f null - 2> "$RUNNER_TEMP/orbit-audio-check.log"
+          cat "$RUNNER_TEMP/orbit-audio-check.log"
+          awk '/max_volume:/ { if ($(NF-1) + 0 > -35) audible=1 } END { exit !audible }' "$RUNNER_TEMP/orbit-audio-check.log"
+          printf 'Decoded Wayland recording: %s video frames and an audible system audio track\n' "$frames"
           EOF
       - name: Keep the verified Wayland recording
         if: matrix.arch == 'x64'

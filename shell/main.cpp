@@ -649,7 +649,7 @@ private:
                         const button = document.querySelector('#record-button');
                         const status = document.querySelector('#record-status');
                         const message = document.querySelector('#message');
-                        document.querySelector('#record-audio').checked = false;
+                        document.querySelector('#record-audio').checked = true;
                         let stopping = false;
                         const poll = setInterval(() => {
                             if (message.textContent.startsWith('Не удалось начать запись') ||
