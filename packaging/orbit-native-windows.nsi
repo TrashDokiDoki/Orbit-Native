@@ -76,7 +76,21 @@ Function EnsureWebView
             StrCpy $1 1
         ${EndIf}
         Delete "$PLUGINSDIR\OrbitWebView2Setup.exe"
-        Call ReadWebViewVersion
+        ${If} $1 == 0
+            StrCpy $2 20
+            ${Do}
+                Call ReadWebViewVersion
+                ${If} $0 != ""
+                ${AndIf} $0 != "0.0.0.0"
+                    ${ExitDo}
+                ${EndIf}
+                ${If} $2 == 0
+                    ${ExitDo}
+                ${EndIf}
+                Sleep 250
+                IntOp $2 $2 - 1
+            ${Loop}
+        ${EndIf}
         ${If} $1 != 0
         ${OrIf} $0 == ""
         ${OrIf} $0 == "0.0.0.0"
