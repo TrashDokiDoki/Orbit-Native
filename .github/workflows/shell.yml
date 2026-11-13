@@ -167,7 +167,9 @@ jobs:
           export QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland
           ORBIT_TEST_PORTAL=1 ORBIT_TEST_WAYLAND_DESKTOP=1 timeout 60s OrbitShell --smoke-test
           export ORBIT_TEST_RECORD_OUTPUT="$RUNNER_TEMP/orbit-wayland-recording"
-          timeout 30s OrbitShell --smoke-test > "$RUNNER_TEMP/orbit-record.log" 2>&1 &
+          # Record caps negotiation inside WebKit as well as on the PipeWire graph.
+          GST_DEBUG_NO_COLOR=1 GST_DEBUG='pipewiresrc:6,webkitmediastream:5' \
+            timeout 30s OrbitShell --smoke-test > "$RUNNER_TEMP/orbit-record.log" 2>&1 &
           recorder=$!
           for attempt in {1..60}; do
             if grep -q 'record button ready' "$RUNNER_TEMP/orbit-record.log"; then break; fi
@@ -182,7 +184,7 @@ jobs:
           if ! wait "$recorder"; then
             kill "$monitor" 2>/dev/null || true
             jq -c '[.[] | select(.type == "PipeWire:Interface:Port") | {id, props: (.info.props | with_entries(select(.key | test("^(node.id|port.direction|port.name)$")))), formats: .info.params.EnumFormat}]' "$RUNNER_TEMP/orbit-pipewire-state.json" || true
-            cat "$RUNNER_TEMP/orbit-record.log"
+            tail -n 160 "$RUNNER_TEMP/orbit-record.log"
             exit 1
           fi
           frames=$(ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of csv=p=0 "$ORBIT_TEST_RECORD_OUTPUT")
