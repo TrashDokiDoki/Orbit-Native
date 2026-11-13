@@ -156,7 +156,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
     set(CPACK_DEBIAN_PACKAGE_DEPENDS "qt6-qpa-plugins")
     if(ORBIT_PACKAGE_SHELL)
-        string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS ", qt6-wayland, tesseract-ocr, tesseract-ocr-rus")
+        string(APPEND CPACK_DEBIAN_PACKAGE_DEPENDS ", qt6-wayland, tesseract-ocr, tesseract-ocr-rus, xdg-desktop-portal, gstreamer1.0-pipewire")
         set(ORBIT_DICTATION_BUNDLE "" CACHE PATH "Directory containing Vosk and the Linux dictation models")
         if(ORBIT_DICTATION_BUNDLE)
             if(NOT EXISTS "${ORBIT_DICTATION_BUNDLE}/libvosk.so" OR
