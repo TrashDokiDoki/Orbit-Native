@@ -1996,10 +1996,10 @@ private:
                 issue = waylandEncoder_.start(std::move(stream), recordFile_->fileName(), [this](QString failure) {
                     auto *portal = std::exchange(waylandPortal_, nullptr);
                     portal->deleteLater();
-                    if (!failure.isEmpty()) recordFile_.reset();
-                    const auto result = failure.isEmpty() ? saveRecording(true) : QJsonValue(error(failure));
                     recording_ = false;
                     refreshMemoryTarget();
+                    if (!failure.isEmpty()) recordFile_.reset();
+                    const auto result = failure.isEmpty() ? saveRecording(true) : QJsonValue(error(failure));
                     emitTo(main_, "wayland-recording-finished", result);
                 });
             }

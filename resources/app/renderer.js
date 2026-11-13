@@ -470,7 +470,9 @@ document.querySelectorAll('[data-capture]').forEach(b=>b.onclick=()=>run(api.cap
 let recordStarting = false;
 let waylandRecording = false;
 let waylandRecordStopping = false;
+let waylandRecordGeneration = 0;
 api.onWaylandRecordingFinished?.(result => {
+  waylandRecordGeneration++;
   recordStart = 0;
   waylandRecordStopping = false;
   $('record-label').textContent = 'Запись экрана';
@@ -489,7 +491,9 @@ async function toggleWaylandRecord() {
   }
   recordStarting = true;
   try {
+    const generation = ++waylandRecordGeneration;
     const result = await api.waylandRecordStart();
+    if (generation !== waylandRecordGeneration) return;
     if (result?.error) throw Error(result.error);
     recordStart = Date.now();
     $('record-label').textContent = 'Остановить запись';
