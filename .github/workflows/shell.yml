@@ -98,7 +98,7 @@ jobs:
       - name: Capture a real Wayland output through the system portal
         if: matrix.arch == 'x64'
         run: |
-          sudo apt-get install -y sway xdg-desktop-portal-wlr grim
+          sudo apt-get install -y sway xdg-desktop-portal-wlr grim pipewire
           dbus-run-session -- bash -euo pipefail <<'EOF'
           export XDG_RUNTIME_DIR="$(mktemp -d)"
           chmod 700 "$XDG_RUNTIME_DIR"
@@ -108,9 +108,11 @@ jobs:
           mkdir -p "$XDG_CONFIG_HOME/xdg-desktop-portal"
           printf '[preferred]\ndefault=wlr\n' > "$XDG_CONFIG_HOME/xdg-desktop-portal/sway-portals.conf"
           printf 'output HEADLESS-1 mode 1280x960\n' > "$XDG_CONFIG_HOME/sway.conf"
+          pipewire > "$RUNNER_TEMP/orbit-pipewire.log" 2>&1 &
+          pipewire_pid=$!
           sway -c "$XDG_CONFIG_HOME/sway.conf" > "$RUNNER_TEMP/orbit-sway.log" 2>&1 &
           compositor=$!
-          trap 'kill "$compositor" 2>/dev/null || true; cat "$RUNNER_TEMP/orbit-sway.log"' EXIT
+          trap 'kill "$compositor" "$pipewire_pid" 2>/dev/null || true; cat "$RUNNER_TEMP/orbit-sway.log" "$RUNNER_TEMP/orbit-pipewire.log"' EXIT
           for attempt in {1..40}; do
             for socket in "$XDG_RUNTIME_DIR"/wayland-*; do
               if test -S "$socket"; then
@@ -121,6 +123,11 @@ jobs:
             sleep .25
           done
           test -n "${WAYLAND_DISPLAY:-}"
+          for attempt in {1..40}; do
+            if test -S "$XDG_RUNTIME_DIR/pipewire-0"; then break; fi
+            sleep .25
+          done
+          test -S "$XDG_RUNTIME_DIR/pipewire-0"
           dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP XDG_SESSION_TYPE XDG_RUNTIME_DIR XDG_CONFIG_HOME
           export QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland
           ORBIT_TEST_PORTAL=1 ORBIT_TEST_WAYLAND_DESKTOP=1 timeout 60s OrbitShell --smoke-test
