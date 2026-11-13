@@ -1012,6 +1012,16 @@ private:
             const auto target = owner && owner != GetCurrentProcessId() ? foreground : lastExternalWindow_;
             pastePlainTextAfterRelease(target, GetClipboardSequenceNumber(), 40);
         });
+#elif defined(Q_OS_LINUX)
+        if (x11Input_) add("plain-paste", QStringLiteral("Вставить без форматирования"), "Ctrl+Alt+Shift+V", [this] {
+            auto *clipboard = QApplication::clipboard();
+            const auto *contents = clipboard->mimeData();
+            const auto target = x11Input_->foreground().window;
+            if (!contents || !contents->hasText() || !target) return;
+            const auto plainText = clipboard->text();
+            clipboard->setText(plainText);
+            pastePlainTextOnX11(target, plainText, 40);
+        });
 #endif
         for (const auto &entry : settings_.value("items").toArray()) {
             const auto item = entry.toObject();
@@ -1587,6 +1597,21 @@ private:
         if (current != target && owner != GetCurrentProcessId()) return;
         const auto result = pasteToPreviousWindow(target).toObject();
         if (result.contains("error")) emitTo(main_, "error", result.value("error"));
+    }
+#endif
+
+#ifdef Q_OS_LINUX
+    void pastePlainTextOnX11(unsigned long target, const QString &text, int attempts)
+    {
+        if (x11Input_->foreground().window != target || QApplication::clipboard()->text() != text) return;
+        if (x11Input_->pasteShortcutHeld()) {
+            if (attempts > 0) QTimer::singleShot(50, this, [this, target, text, attempts] {
+                pastePlainTextOnX11(target, text, attempts - 1);
+            });
+            return;
+        }
+        if (!x11Input_->paste(target))
+            emitTo(main_, "error", QStringLiteral("Текст скопирован. Вставьте его сочетанием Ctrl+V."));
     }
 #endif
 

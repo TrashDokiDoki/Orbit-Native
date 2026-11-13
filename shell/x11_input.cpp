@@ -179,6 +179,20 @@ bool X11Input::activate(unsigned long window) const
     return sent != 0;
 }
 
+bool X11Input::pasteShortcutHeld() const
+{
+    const auto &state = *state_;
+    if (!state.display) return false;
+    char keys[32]{};
+    XQueryKeymap(state.display, keys);
+    const KeySym shortcut[] = {XK_Control_L, XK_Control_R, XK_Alt_L, XK_Alt_R, XK_Shift_L, XK_Shift_R, XK_v};
+    for (const auto symbol : shortcut) {
+        const auto code = XKeysymToKeycode(state.display, symbol);
+        if (code && (keys[code / 8] & (1 << (code % 8)))) return true;
+    }
+    return false;
+}
+
 bool X11Input::paste(unsigned long window) const
 {
     const auto &state = *state_;

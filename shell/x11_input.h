@@ -22,6 +22,7 @@ public:
     X11Foreground foreground() const;
     bool activate(unsigned long window) const;
     bool paste(unsigned long window) const;
+    bool pasteShortcutHeld() const;
 
 private:
     struct State;
