@@ -168,7 +168,7 @@ jobs:
           ORBIT_TEST_PORTAL=1 ORBIT_TEST_WAYLAND_DESKTOP=1 timeout 60s OrbitShell --smoke-test
           export ORBIT_TEST_RECORD_OUTPUT="$RUNNER_TEMP/orbit-wayland-recording"
           # Record caps negotiation inside WebKit as well as on the PipeWire graph.
-          GST_DEBUG_NO_COLOR=1 GST_DEBUG='pipewiresrc:6,webkitmediastream:5' \
+          ORBIT_TEST_SOFTWARE_RENDERING=1 GST_DEBUG_NO_COLOR=1 GST_DEBUG='pipewiresrc:6,webkitmediastream:5' \
             timeout 30s OrbitShell --smoke-test > "$RUNNER_TEMP/orbit-record.log" 2>&1 &
           recorder=$!
           for attempt in {1..60}; do

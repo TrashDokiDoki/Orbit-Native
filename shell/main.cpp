@@ -134,6 +134,7 @@ public:
         }
 #endif
         gpuEnabled_ = settings_.value("gpuAcceleration").toBool(true);
+        if (testing_ && qEnvironmentVariableIsSet("ORBIT_TEST_SOFTWARE_RENDERING")) gpuEnabled_ = false;
 #ifdef Q_OS_WIN
         if (!gpuEnabled_) {
             auto arguments = qgetenv("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS");
