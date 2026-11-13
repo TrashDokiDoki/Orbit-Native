@@ -211,10 +211,27 @@ function animateIdle() {
 reduceMotion.addEventListener('change', syncIdleMotion);
 
 let playbackTimer;
+let audioStatusTimer;
+let happStatusTimer;
 let controlsWork = false;
 function syncPanelWork() {
   syncIdleMotion();
   const visible = document.visibilityState === 'visible';
+  const panelVisible = visible && open;
+  const audioVisible = panelVisible && tab === 'home';
+  if (audioVisible && audioStatusTimer === undefined) {
+    audioStatusTimer = setInterval(() => changeAudio('status'), 1200);
+    void changeAudio('status');
+  } else if (!audioVisible && audioStatusTimer !== undefined) {
+    clearInterval(audioStatusTimer);
+    audioStatusTimer = undefined;
+  }
+  if (panelVisible && happStatusTimer === undefined) {
+    happStatusTimer = setInterval(refreshHapp, 3500);
+  } else if (!panelVisible && happStatusTimer !== undefined) {
+    clearInterval(happStatusTimer);
+    happStatusTimer = undefined;
+  }
   const controls = visible && open && tab === 'controls';
   const network = visible && open && tab === 'network';
   if (network && networkTimer === undefined) {
@@ -928,8 +945,6 @@ audioDevice.onchange = () => {
   audioDevice.blur();
 };
 $('audio-mute').onclick = () => changeAudio('mute');
-setInterval(() => { if (open && tab === 'home') changeAudio('status'); }, 1200);
-changeAudio('status');
 
 const frequencies = [60, 120, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const eqSliders = frequencies.map(frequency => {
@@ -1035,7 +1050,6 @@ $('happ-vpn').oncontextmenu = async event => {
     message(regionNames.of(info.country) + ' · ' + info.ip);
   });
 };
-setInterval(() => { if (open) refreshHapp(); }, 3500);
 
 function applyPlatformLabels() {
   if (systemLabel !== 'Linux') return;
