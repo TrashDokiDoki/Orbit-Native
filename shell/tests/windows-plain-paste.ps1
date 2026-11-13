@@ -35,8 +35,14 @@ function Wait-Editor([int]$Milliseconds) {
 
 try {
     $window.Show()
-    Wait-Editor 4000
-    if ($app.HasExited) { throw 'Orbit exited before the clipboard test' }
+    $ready = [Diagnostics.Stopwatch]::StartNew()
+    do {
+        Wait-Editor 200
+        $app.Refresh()
+        if ($app.HasExited) { throw 'Orbit exited before the clipboard test' }
+    } until ($app.MainWindowTitle -eq 'Orbit Native' -or $ready.ElapsedMilliseconds -ge 30000)
+    if ($app.MainWindowTitle -ne 'Orbit Native') { throw 'Orbit window was not ready for the shortcut test' }
+    Wait-Editor 700
     [void][OrbitPasteTest]::SetForegroundWindow($window.Handle)
     [void]$editor.Focus()
     if ([OrbitPasteTest]::GetForegroundWindow() -ne $window.Handle) { throw 'Test editor is not foreground' }
@@ -58,7 +64,8 @@ try {
     }
     Wait-Editor 1200
     if ($editor.Text -ne 'Orbit clipboard fixture') {
-        throw "Expected unformatted fixture text, received '$($editor.Text)'"
+        $richTextRemains = [Windows.Forms.Clipboard]::ContainsText([Windows.Forms.TextDataFormat]::Rtf)
+        throw "Expected unformatted fixture text, received '$($editor.Text)'. RTF still in clipboard: $richTextRemains"
     }
     $editor.SelectAll()
     if (!$editor.SelectionFont -or $editor.SelectionFont.Bold) { throw 'Pasted text retained formatting' }
