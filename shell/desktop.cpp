@@ -145,7 +145,13 @@ QJsonValue openSystemSettings(const QString &page)
         {"vpn","network"}, {"sound","sound"}, {"theme","appearance"}, {"notifications","notifications"}, {"apps","applications"}};
     if (!gnome.isEmpty() && (desktopHas("GNOME") || kde.isEmpty()) &&
         QProcess::startDetached(gnome, {gnomePages.value(page)})) return true;
-    if (!kde.isEmpty() && QProcess::startDetached(kde, {})) return true;
+    if (!kde.isEmpty()) {
+        const QHash<QString, QString> kdePages{{"bluetooth","kcm_bluetooth"}, {"sound","kcm_pulseaudio"},
+            {"theme","kcm_colors"}};
+        const auto module = kdePages.value(page);
+        const QStringList arguments = module.isEmpty() ? QStringList{} : QStringList{module};
+        if (QProcess::startDetached(kde, arguments)) return true;
+    }
     if (!xfce.isEmpty() && QProcess::startDetached(xfce, {})) return true;
 #endif
     return error(QStringLiteral("Не удалось открыть параметры системы"));
