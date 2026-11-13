@@ -999,6 +999,19 @@ private:
         add("color", QStringLiteral("Взять цвет с экрана"), "Ctrl+Alt+C", [grab] { grab("color"); });
         add("qr", QStringLiteral("Считать QR-код"), "Ctrl+Alt+Q", [grab] { grab("qr"); });
         add("record", QStringLiteral("Запись экрана"), "Ctrl+Alt+R", [this, tab] { tab("tools"); emitTo(main_, "record-toggle", true); });
+#ifdef Q_OS_WIN
+        add("plain-paste", QStringLiteral("Вставить без форматирования"), "Ctrl+Alt+Shift+V", [this] {
+            auto *clipboard = QApplication::clipboard();
+            const auto *contents = clipboard->mimeData();
+            if (!contents || !contents->hasText()) return;
+            const auto plainText = clipboard->text();
+            clipboard->setText(plainText);
+            QTimer::singleShot(220, this, [this] {
+                const auto result = pasteToPreviousWindow().toObject();
+                if (result.contains("error")) emitTo(main_, "error", result.value("error"));
+            });
+        });
+#endif
         for (const auto &entry : settings_.value("items").toArray()) {
             const auto item = entry.toObject();
             const auto target = item.value("target").toString();
