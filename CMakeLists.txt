@@ -54,11 +54,12 @@ if(ORBIT_WEB_SHELL)
         find_package(PkgConfig REQUIRED)
         pkg_check_modules(OrbitPulse REQUIRED IMPORTED_TARGET libpulse libpulse-mainloop-glib)
         pkg_check_modules(OrbitLayerShell REQUIRED IMPORTED_TARGET gtk-layer-shell-0)
+        pkg_check_modules(OrbitGStreamer REQUIRED IMPORTED_TARGET gstreamer-1.0)
         find_package(X11 REQUIRED COMPONENTS Xtst)
         set_target_properties(OrbitShell PROPERTIES AUTOMOC ON)
         target_sources(OrbitShell PRIVATE shell/x11_input.cpp shell/portal_request.cpp
-            shell/portal_screenshot.cpp shell/portal_shortcuts.cpp shell/portal_screencast.cpp shell/dictation.cpp)
-        target_link_libraries(OrbitShell PRIVATE Qt6::DBus PkgConfig::OrbitPulse PkgConfig::OrbitLayerShell X11::X11 X11::Xtst)
+            shell/portal_screenshot.cpp shell/portal_shortcuts.cpp shell/portal_screencast.cpp shell/wayland_video_encoder.cpp shell/dictation.cpp)
+        target_link_libraries(OrbitShell PRIVATE Qt6::DBus PkgConfig::OrbitPulse PkgConfig::OrbitLayerShell PkgConfig::OrbitGStreamer X11::X11 X11::Xtst)
     endif()
     set(orbit_ui_assets
             "${CMAKE_CURRENT_SOURCE_DIR}/resources/app/index.html"
