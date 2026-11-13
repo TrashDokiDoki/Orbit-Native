@@ -166,7 +166,7 @@ jobs:
           gdbus wait --session --timeout 10 org.freedesktop.impl.portal.desktop.wlr
           export QT_QPA_PLATFORM=wayland GDK_BACKEND=wayland
           ORBIT_TEST_PORTAL=1 ORBIT_TEST_WAYLAND_DESKTOP=1 timeout 60s OrbitShell --smoke-test
-          export ORBIT_TEST_RECORD_OUTPUT="$RUNNER_TEMP/orbit-wayland-recording"
+          export ORBIT_TEST_RECORD_OUTPUT="$RUNNER_TEMP/orbit-wayland-recording.webm"
           # Record caps negotiation inside WebKit as well as on the PipeWire graph.
           ORBIT_TEST_SOFTWARE_RENDERING=1 GST_DEBUG_NO_COLOR=1 GST_DEBUG='pipewiresrc:6,webkitmediastream:5' \
             timeout 30s OrbitShell --smoke-test > "$RUNNER_TEMP/orbit-record.log" 2>&1 &
@@ -194,6 +194,13 @@ jobs:
           fi
           printf 'Decoded Wayland recording: %s video frames\n' "$frames"
           EOF
+      - name: Keep the verified Wayland recording
+        if: matrix.arch == 'x64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OrbitShell-wayland-recording
+          path: ${{ runner.temp }}/orbit-wayland-recording.webm
+          if-no-files-found: error
       - name: Remove the Debian package
         if: success() || failure()
         run: |
