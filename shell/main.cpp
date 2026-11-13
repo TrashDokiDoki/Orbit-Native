@@ -396,7 +396,7 @@ private:
     }
 #endif
 
-    void refreshSteamDownload(const QString &testRoot = {})
+    void refreshSteamDownload(const QStringList &testRoots = {})
     {
         QStringList roots;
 #ifdef Q_OS_WIN
@@ -409,7 +409,7 @@ private:
                  home.filePath(".var/app/com.valvesoftware.Steam/data/Steam")};
 #endif
         QString progress;
-        if (!testRoot.isEmpty()) roots = {testRoot};
+        if (!testRoots.isEmpty()) roots = testRoots;
         for (const auto &root : roots) {
             if (root.isEmpty()) continue;
             const QDir directory(root);
@@ -466,8 +466,10 @@ private:
                     done = qMax(done, bytes);
                 }
             }
-            if (recentProgress && done < total) progress = QStringLiteral("↓ Steam %1%").arg(int(100.0 * done / total));
-            break;
+            if (recentProgress && done < total) {
+                progress = QStringLiteral("↓ Steam %1%").arg(qMin(99, int(100.0 * done / total)));
+                break;
+            }
         }
         if (progress == steamDownload_) return;
         steamDownload_ = progress;
@@ -489,11 +491,19 @@ private:
         manifest.write("\"BytesToDownload\" \"100\"\n\"BytesDownloaded\" \"37\"\n");
         log.close();
         manifest.close();
-        refreshSteamDownload(fixture.path());
+        QTemporaryDir stale;
+        const QDir staleRoot(stale.path());
+        if (!stale.isValid() || !staleRoot.mkpath("logs")) return false;
+        QFile staleLog(staleRoot.filePath("logs/content_log.txt"));
+        if (!staleLog.open(QIODevice::WriteOnly)) return false;
+        staleLog.write(earlier + "AppID 456 update progress : download 20/100\n");
+        staleLog.close();
+        const QStringList roots{stale.path(), fixture.path()};
+        refreshSteamDownload(roots);
         if (steamDownload_ != QStringLiteral("↓ Steam 37%") || !log.open(QIODevice::Append)) return false;
         log.write(timestamp + "AppID 123 finished update, 1 mounted depots\n");
         log.close();
-        refreshSteamDownload(fixture.path());
+        refreshSteamDownload(roots);
         return steamDownload_.isEmpty();
     }
 
