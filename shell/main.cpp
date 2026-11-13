@@ -177,6 +177,9 @@ public:
 #endif
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
+            connect(&steamPoll_, &QTimer::timeout, this, &OrbitShellController::refreshSteamDownload);
+            steamPoll_.start(5000);
+            refreshSteamDownload();
             updateKeyboard();
             registerHotkeys();
             startTray();
@@ -192,6 +195,7 @@ public:
         webview_run(main_);
         shuttingDown_ = true;
         keyboardPoll_.stop();
+        steamPoll_.stop();
         collapse_.stop();
         alarm_.stop();
         updateTimer_.stop();
@@ -365,6 +369,75 @@ private:
         updateAutohide(hide, over);
     }
 #endif
+
+    void refreshSteamDownload()
+    {
+        QStringList roots;
+#ifdef Q_OS_WIN
+        const QSettings user(QStringLiteral("HKEY_CURRENT_USER\\Software\\Valve\\Steam"), QSettings::NativeFormat);
+        const QSettings machine(QStringLiteral("HKEY_LOCAL_MACHINE\\SOFTWARE\\Valve\\Steam"), QSettings::Registry32Format);
+        roots = {user.value("SteamPath").toString(), machine.value("InstallPath").toString()};
+#else
+        const QDir home(QDir::homePath());
+        roots = {home.filePath(".steam/steam"), home.filePath(".local/share/Steam"),
+                 home.filePath(".var/app/com.valvesoftware.Steam/data/Steam")};
+#endif
+        QString progress;
+        for (const auto &root : roots) {
+            if (root.isEmpty()) continue;
+            const QDir directory(root);
+            QFile log(directory.filePath("logs/content_log.txt"));
+            const auto now = QDateTime::currentDateTime();
+            const auto age = QFileInfo(log).lastModified().secsTo(now);
+            if (age < 0 || age > 120 || !log.open(QIODevice::ReadOnly)) continue;
+            if (!log.seek(qMax(qint64{0}, log.size() - 65536))) continue;
+            static const QRegularExpression event(R"(^\[([^\]]+)\] AppID (\d+) (.+)$)");
+            static const QRegularExpression sample(R"(^update (?:started|progress)\s*:\s*download (\d+)/(\d+))");
+            static const QRegularExpression ended(R"(^(?:finished update|update canceled|update finished|App update changed\s*:\s*None))");
+            QString id;
+            qint64 done = 0, total = 0;
+            for (const auto &line : QString::fromUtf8(log.read(65536)).split('\n')) {
+                const auto item = event.match(line.trimmed());
+                if (!item.hasMatch()) continue;
+                const auto detail = item.captured(3);
+                const auto update = sample.match(detail);
+                if (update.hasMatch()) {
+                    const auto time = QDateTime::fromString(item.captured(1), QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+                    if (!time.isValid() || time.secsTo(now) > 120) continue;
+                    id = item.captured(2);
+                    done = update.captured(1).toLongLong();
+                    total = update.captured(2).toLongLong();
+                } else if (id == item.captured(2) && ended.match(detail).hasMatch()) {
+                    id.clear();
+                }
+            }
+            if (id.isEmpty() || total <= 0 || done >= total) continue;
+            QStringList libraries{root};
+            QFile folders(directory.filePath("steamapps/libraryfolders.vdf"));
+            if (folders.open(QIODevice::ReadOnly)) {
+                static const QRegularExpression library(R"vdf("path"\s+"([^"]+)")vdf");
+                auto paths = library.globalMatch(QString::fromUtf8(folders.read(1024 * 1024)));
+                while (paths.hasNext()) libraries.append(paths.next().captured(1).replace("\\\\", "\\"));
+            }
+            libraries.removeDuplicates();
+            static const QRegularExpression expected(R"acf("BytesToDownload"\s+"(\d+)")acf");
+            static const QRegularExpression received(R"acf("BytesDownloaded"\s+"(\d+)")acf");
+            for (const auto &library : libraries) {
+                QFile manifest(QDir(library).filePath("steamapps/appmanifest_" + id + ".acf"));
+                if (!manifest.open(QIODevice::ReadOnly)) continue;
+                const auto data = QString::fromUtf8(manifest.read(1024 * 1024));
+                if (expected.match(data).captured(1).toLongLong() != total) continue;
+                const auto bytes = received.match(data).captured(1).toLongLong();
+                if (bytes <= total) done = qMax(done, bytes);
+            }
+            if (done < total) progress = QStringLiteral("↓ Steam %1%").arg(int(100.0 * done / total));
+            break;
+        }
+        if (progress == steamDownload_) return;
+        steamDownload_ = progress;
+        applyBounds();
+        if (mainReady_) emitTo(main_, "steam-download", steamDownload_);
+    }
 
     void updateKeyboard()
     {
@@ -1084,7 +1157,8 @@ private:
         const int top = edge ? screen->geometry().top() : area.top() + std::clamp(settings_.value("top").toInt(), 0, 200);
         const double opacity = std::clamp(settings_.value("opacity").toDouble(1), .45, 1.0);
         const auto mode = settings_.value("musicMode").toString();
-        const int compactWidth = !musicPlaying_ ? 184 : mode == "cover" ? 232 : 366;
+        const int musicWidth = !musicPlaying_ ? 184 : mode == "cover" ? 232 : 366;
+        const int compactWidth = qMax(musicWidth, steamDownload_.isEmpty() ? 184 : 250);
         const bool panel = expanded_ || collapse_.isActive();
         const auto scale = (std::min)({
             std::clamp(settings_.value("scale").toDouble(1), .8, 2.0),
@@ -2147,7 +2221,8 @@ private:
             }
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
                     {"systemLabel", system}, {"platform", system == "Windows" ? "win32" : "linux"},
-                    {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_}});
+                    {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_},
+                    {"steamDownload", steamDownload_}});
             if (window == preferences_) {
                 preferencesReady_ = true;
                 showSettingsSection();
@@ -2418,6 +2493,8 @@ private:
 #endif
     QTimer collapse_;
     QTimer keyboardPoll_;
+    QTimer steamPoll_;
+    QString steamDownload_;
 #if defined(Q_OS_WIN) && defined(__ICoreWebView2_19_INTERFACE_DEFINED__)
     QTimer memoryIdle_;
     bool lowMemory_ = false;

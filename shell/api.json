@@ -55,6 +55,7 @@
     "onLayout": "layout",
     "onCaps": "caps",
     "onState": "state",
+    "onSteamDownload": "steam-download",
     "onError": "error",
     "onNativeError": "native-error",
     "onAlarm": "alarm",
