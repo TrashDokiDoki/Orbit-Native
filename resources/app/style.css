@@ -496,6 +496,17 @@ body.light .home-dashboard { --player-surface: #f0eef3; --player-line: #201b2c21
 }
 #island select:disabled { opacity: .6; }
 #note-select { min-height: 30.8px; }
+.weather-location::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-inline-end: 6px;
+  border: 1px solid currentColor;
+  border-radius: 50% 50% 50% 0;
+  background: radial-gradient(circle, currentColor 1px, transparent 1.5px);
+  transform: rotate(-45deg);
+}
 #eq-open { padding: 4px 7px; color: var(--accent); font-size: 17px; }
 #eq-dialog {
   width: min(490px, 94%);

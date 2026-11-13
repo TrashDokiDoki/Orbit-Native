@@ -598,11 +598,12 @@ function renderWeather(data) {
   root.className = 'weather-dashboard';
   const hero = text('article', '', 'weather-hero');
   const heading = text('div', '', 'weather-heading');
-  const city = button('⌖ ' + data.location.name, () => {
+  const city = button(data.location.name, () => {
     $('weather-form').hidden = !$('weather-form').hidden;
     city.setAttribute('aria-expanded', String(!$('weather-form').hidden));
     if (!$('weather-form').hidden) $('weather-city').select();
   });
+  city.classList.add('weather-location');
   city.title = 'Выбрать город';
   city.setAttribute('aria-expanded', String(!$('weather-form').hidden));
   const refresh = button('⟳', () => refreshWeather(weatherCity, true));
