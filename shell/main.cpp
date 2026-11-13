@@ -176,6 +176,13 @@ public:
         }
         resize(false);
         visible(main_, true);
+#ifdef Q_OS_WIN
+        if (testing_ && !testCaptureVisibility()) {
+            qWarning("Orbit smoke: Windows capture visibility toggle failed");
+            webview_destroy(main_);
+            return 3;
+        }
+#endif
         media_.changed = [this](const Track &track) { updateMedia(track); };
         if (!testing_ || qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) media_.refresh();
         if (!testing_) {
@@ -1084,6 +1091,20 @@ private:
         return true;
 #endif
     }
+
+#ifdef Q_OS_WIN
+    bool testCaptureVisibility()
+    {
+        const auto window = static_cast<HWND>(webview_get_window(main_));
+        DWORD affinity = WDA_NONE;
+        if (!setCaptureVisibility(true) || !GetWindowDisplayAffinity(window, &affinity) || affinity != WDA_NONE)
+            return false;
+        if (!setCaptureVisibility(false) || !GetWindowDisplayAffinity(window, &affinity))
+            return false;
+        // Windows 10 before version 2004 falls back to WDA_MONITOR.
+        return affinity == WDA_EXCLUDEFROMCAPTURE || affinity == WDA_MONITOR;
+    }
+#endif
 
     void shape(const QJsonObject &metrics)
     {
