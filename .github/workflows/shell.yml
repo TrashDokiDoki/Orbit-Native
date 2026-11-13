@@ -259,14 +259,20 @@ jobs:
             if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
           }
           throw 'Could not install the NSIS compiler'
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: ocr-cache
         with:
           path: ${{ runner.temp }}/orbit-vcpkg-cache
-          key: windows-${{ matrix.arch }}-ocr-${{ hashFiles('packaging/ocr/vcpkg.json') }}
+          key: windows-${{ matrix.arch }}-ocr-${{ hashFiles('packaging/ocr/vcpkg.json', 'packaging/ocr/build-windows.ps1') }}
       - name: Build the bundled OCR runtime
         timeout-minutes: 35
         shell: pwsh
         run: ./packaging/ocr/build-windows.ps1 -Architecture ${{ matrix.arch }} -Output orbit-ocr
+      - uses: actions/cache/save@v4
+        if: steps.ocr-cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ runner.temp }}/orbit-vcpkg-cache
+          key: ${{ steps.ocr-cache.outputs.cache-primary-key }}
       - name: Get signed Microsoft WebView2 bootstrapper
         shell: pwsh
         run: |
