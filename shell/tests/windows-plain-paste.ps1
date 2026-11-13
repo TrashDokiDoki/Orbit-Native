@@ -34,7 +34,6 @@ function Wait-Editor([int]$Milliseconds) {
 }
 
 try {
-    $window.Show()
     $ready = [Diagnostics.Stopwatch]::StartNew()
     do {
         Wait-Editor 200
@@ -43,8 +42,12 @@ try {
     } until ($app.MainWindowTitle -eq 'Orbit Native' -or $ready.ElapsedMilliseconds -ge 30000)
     if ($app.MainWindowTitle -ne 'Orbit Native') { throw 'Orbit window was not ready for the shortcut test' }
     Wait-Editor 700
+    $window.TopMost = $true
+    $window.Show()
+    $window.Activate()
     [void][OrbitPasteTest]::SetForegroundWindow($window.Handle)
     [void]$editor.Focus()
+    Wait-Editor 200
     if ([OrbitPasteTest]::GetForegroundWindow() -ne $window.Handle) { throw 'Test editor is not foreground' }
     $data = [Windows.Forms.DataObject]::new()
     $data.SetText('Orbit clipboard fixture')
