@@ -64,6 +64,10 @@ jobs:
       - name: Install, launch and remove the Debian package
         run: |
           sudo apt-get install -y ./package/orbit-native-shell_*.deb
+          desktop=/usr/share/applications/orbit-native-shell.desktop
+          grep -Fx 'Name=Orbit Native' "$desktop"
+          grep -Fx 'Exec=OrbitShell' "$desktop"
+          grep -Fx 'Terminal=false' "$desktop"
           command -v tesseract
           tesseract --list-langs | grep -x rus
           curl -fsSL https://raw.githubusercontent.com/alphacep/vosk-api/v0.3.45/python/example/test.wav -o "$RUNNER_TEMP/dictation.wav"
