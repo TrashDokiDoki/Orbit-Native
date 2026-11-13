@@ -1006,10 +1006,11 @@ private:
             if (!contents || !contents->hasText()) return;
             const auto plainText = clipboard->text();
             clipboard->setText(plainText);
-            QTimer::singleShot(220, this, [this] {
-                const auto result = pasteToPreviousWindow().toObject();
-                if (result.contains("error")) emitTo(main_, "error", result.value("error"));
-            });
+            const auto foreground = GetForegroundWindow();
+            DWORD owner = 0;
+            GetWindowThreadProcessId(foreground, &owner);
+            const auto target = owner && owner != GetCurrentProcessId() ? foreground : lastExternalWindow_;
+            pastePlainTextAfterRelease(target, GetClipboardSequenceNumber(), 40);
         });
 #endif
         for (const auto &entry : settings_.value("items").toArray()) {
@@ -1569,14 +1570,39 @@ private:
         else state_["clips"] = previous;
     }
 
-    QJsonValue pasteToPreviousWindow()
+#ifdef Q_OS_WIN
+    void pastePlainTextAfterRelease(HWND target, DWORD clipboardSequence, int attempts)
+    {
+        if (GetClipboardSequenceNumber() != clipboardSequence) return;
+        if ((GetAsyncKeyState(VK_CONTROL) | GetAsyncKeyState(VK_MENU) |
+             GetAsyncKeyState(VK_SHIFT) | GetAsyncKeyState('V')) & 0x8000) {
+            if (attempts > 0) QTimer::singleShot(50, this, [this, target, clipboardSequence, attempts] {
+                pastePlainTextAfterRelease(target, clipboardSequence, attempts - 1);
+            });
+            return;
+        }
+        const auto current = GetForegroundWindow();
+        DWORD owner = 0;
+        GetWindowThreadProcessId(current, &owner);
+        if (current != target && owner != GetCurrentProcessId()) return;
+        const auto result = pasteToPreviousWindow(target).toObject();
+        if (result.contains("error")) emitTo(main_, "error", result.value("error"));
+    }
+#endif
+
+    QJsonValue pasteToPreviousWindow(
+#ifdef Q_OS_WIN
+        HWND target = nullptr
+#endif
+    )
     {
 #ifdef Q_OS_WIN
-        if (!lastExternalWindow_ || !IsWindow(lastExternalWindow_))
+        if (!target) target = lastExternalWindow_;
+        if (!target || !IsWindow(target))
             return error(QStringLiteral("Откройте окно для вставки. Запись уже скопирована."));
         resize(false);
-        SetForegroundWindow(lastExternalWindow_);
-        if (GetForegroundWindow() != lastExternalWindow_)
+        SetForegroundWindow(target);
+        if (GetForegroundWindow() != target)
             return error(QStringLiteral("Не удалось переключить окно. Запись уже скопирована."));
         INPUT keys[4]{};
         for (auto &key : keys) key.type = INPUT_KEYBOARD;
