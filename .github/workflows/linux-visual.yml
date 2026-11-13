@@ -96,7 +96,7 @@ jobs:
       - name: Verify the global paste shortcut in a separate GTK editor
         shell: bash
         run: |
-          xvfb-run -a bash -euo pipefail <<'EOF'
+          xvfb-run -a bash -euxo pipefail <<'EOF'
           export QT_QPA_PLATFORM=xcb GDK_BACKEND=x11
           profile=$(mktemp -d)
           export XDG_CONFIG_HOME="$profile/config" XDG_DATA_HOME="$profile/data" XDG_CACHE_HOME="$profile/cache"
@@ -129,10 +129,14 @@ jobs:
           target=$(timeout 15 xdotool search --sync --onlyvisible --name '^Orbit paste fixture$')
           timeout 10 xdotool windowactivate --sync "$target"
           printf 'Orbit clipboard fixture' | xclip -selection clipboard
-          xdotool keydown ctrl keydown alt keydown shift keydown v
+          xdotool keydown Control_L keydown Alt_L keydown Shift_L keydown v
           sleep .35
-          test ! -s "$ORBIT_PASTE_RESULT"
-          xdotool keyup v keyup shift keyup alt keyup ctrl
+          if [[ -s "$ORBIT_PASTE_RESULT" ]]; then
+            cat "$ORBIT_PASTE_RESULT"
+            echo 'Editor received text before the shortcut was released.'
+            exit 1
+          fi
+          xdotool keyup v keyup Shift_L keyup Alt_L keyup Control_L
           for attempt in {1..20}; do
             if [[ -s "$ORBIT_PASTE_RESULT" ]]; then break; fi
             sleep .1
