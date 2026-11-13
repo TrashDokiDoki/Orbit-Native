@@ -658,7 +658,14 @@ private:
                                 orbitShellTest(false, {error: message.textContent || status.textContent});
                             } else if (!stopping && status.textContent.startsWith('Идёт запись')) {
                                 stopping = true;
-                                setTimeout(() => button.click(), 2200);
+                                // Sway's damage-driven capture only emits frames when pixels change.
+                                const marker = document.createElement('div');
+                                marker.style.cssText = 'position:fixed;top:80px;left:30px;width:30px;height:30px;z-index:9999;pointer-events:none;background:red';
+                                document.body.append(marker);
+                                const animation = setInterval(() => {
+                                    marker.style.backgroundColor = marker.style.backgroundColor === 'red' ? 'blue' : 'red';
+                                }, 200);
+                                setTimeout(() => { clearInterval(animation); marker.remove(); button.click(); }, 3200);
                             } else if (stopping && status.textContent === 'Запись сохранена') {
                                 clearInterval(poll);
                                 orbitShellTest(true);
