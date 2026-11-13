@@ -660,6 +660,10 @@ private:
                             } else if (stopping && status.textContent === 'Запись сохранена') {
                                 clearInterval(poll);
                                 orbitShellTest(true);
+                            } else if (stopping && (message.textContent ||
+                                /^(Сохранение отменено|Не удалось сохранить запись|Ошибка записи экрана)/.test(status.textContent))) {
+                                clearInterval(poll);
+                                orbitShellTest(false, {error: message.textContent || status.textContent});
                             }
                         }, 100);
                         const focus = setInterval(() => {
