@@ -114,6 +114,11 @@ jobs:
           grep -Fq '} else if (ctx->screencopy_manager && ctx->linux_dmabuf) {' "$source_file"
           sed -i '/} else if (ctx->screencopy_manager \&\& ctx->linux_dmabuf) {/i\	} else if (ctx->screencopy_manager \&\& !ctx->linux_dmabuf) {\n		logprint(DEBUG, "wayland: using wlr_screencopy with shared memory");' "$source_file"
           grep -Fq 'using wlr_screencopy with shared memory' "$source_file"
+          # The SHM array stores format/stride pairs. Do not advertise stride as another format.
+          pipewire_source="$RUNNER_TEMP/orbit-wlr-source/src/screencast/pipewire_screencast.c"
+          grep -Fq 'xdpw_format_pw_from_drm_fourcc(*format)' "$pipewire_source"
+          sed -i '/uint32_t \*format;/{N;/current_constraints.shm_formats/s/uint32_t \*format;/struct xdpw_shm_format *format;/;}' "$pipewire_source"
+          sed -i 's/xdpw_format_pw_from_drm_fourcc(\*format)/xdpw_format_pw_from_drm_fourcc(format->fourcc)/' "$pipewire_source"
           meson setup "$RUNNER_TEMP/orbit-wlr-build" "$RUNNER_TEMP/orbit-wlr-source"
           meson compile -C "$RUNNER_TEMP/orbit-wlr-build"
           dbus-run-session -- bash -euo pipefail <<'EOF'
@@ -172,6 +177,7 @@ jobs:
           fi
           frames=$(ffprobe -v error -select_streams v:0 -count_frames -show_entries stream=nb_read_frames -of csv=p=0 "$ORBIT_TEST_RECORD_OUTPUT")
           [[ "$frames" =~ ^[0-9]+$ ]] && (( frames >= 2 ))
+          printf 'Decoded Wayland recording: %s video frames\n' "$frames"
           EOF
       - name: Remove the Debian package
         run: |
