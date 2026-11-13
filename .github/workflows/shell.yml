@@ -180,7 +180,14 @@ jobs:
           # Follow port changes while the WebKit consumer is still connected.
           timeout 8s pw-dump -m > "$RUNNER_TEMP/orbit-pipewire-state.json" &
           monitor=$!
+          export SWAYSOCK=$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'sway-ipc.*.sock' -print -quit)
+          test -S "$SWAYSOCK"
           wtype -s 400 -k Return
+          # Change the output itself, including the area outside Orbit's layer surface.
+          for color in '#c74141' '#344acf' '#30813b' '#cf8234'; do
+            sleep .5
+            swaymsg output HEADLESS-1 bg "$color" solid_color >/dev/null
+          done
           if ! wait "$recorder"; then
             kill "$monitor" 2>/dev/null || true
             jq -c '[.[] | select(.type == "PipeWire:Interface:Port") | {id, props: (.info.props | with_entries(select(.key | test("^(node.id|port.direction|port.name)$")))), formats: .info.params.EnumFormat}]' "$RUNNER_TEMP/orbit-pipewire-state.json" || true
