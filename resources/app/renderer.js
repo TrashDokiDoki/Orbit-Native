@@ -468,8 +468,42 @@ $('quick-text').onclick=()=>{showTab('tools');$('text-input').focus()};
 $('quick-record').onclick=()=>{showTab('tools');toggleRecord()};
 document.querySelectorAll('[data-capture]').forEach(b=>b.onclick=()=>run(api.capture(b.dataset.capture)));
 let recordStarting = false;
+let waylandRecording = false;
+let waylandRecordStopping = false;
+api.onWaylandRecordingFinished?.(result => {
+  recordStart = 0;
+  waylandRecordStopping = false;
+  $('record-label').textContent = 'Запись экрана';
+  $('record-status').textContent = result?.error ? 'Не удалось сохранить запись: ' + result.error
+    : result?.saved ? 'Запись сохранена' : 'Сохранение отменено';
+  renderTimer();
+});
+async function toggleWaylandRecord() {
+  if (recordStarting || waylandRecordStopping) return;
+  if (recordStart) {
+    waylandRecordStopping = true;
+    const result = await run(api.waylandRecordStop());
+    if (!result) waylandRecordStopping = false;
+    else if (waylandRecordStopping) $('record-status').textContent = 'Сохраняем запись…';
+    return;
+  }
+  recordStarting = true;
+  try {
+    const result = await api.waylandRecordStart();
+    if (result?.error) throw Error(result.error);
+    recordStart = Date.now();
+    $('record-label').textContent = 'Остановить запись';
+    $('record-status').textContent = 'Идёт запись · WebM · без системного звука';
+    message('');
+    renderTimer();
+  } catch (error) {
+    message('Не удалось начать запись: ' + error.message);
+  } finally {
+    recordStarting = false;
+  }
+}
 function handleRecordShortcut() {
-  if (mediaRecorder?.state === 'recording' || !api.recordStream || navigator.userActivation?.isActive) {
+  if (waylandRecording || mediaRecorder?.state === 'recording' || !api.recordStream || navigator.userActivation?.isActive) {
     toggleRecord();
     return;
   }
@@ -479,6 +513,7 @@ function handleRecordShortcut() {
   $('record-status').textContent = 'Нажми Enter или «Запись экрана», чтобы выбрать источник.';
 }
 async function toggleRecord() {
+  if (waylandRecording) return toggleWaylandRecord();
   if (mediaRecorder?.state === 'recording') {
     mediaRecorder.stop();
     return;
@@ -800,7 +835,7 @@ $('weather-form').onsubmit = event => {
 };
 setInterval(() => refreshWeather(weatherCity), 15 * 60 * 1000);
 let firstAction;function renderSearch(){const q=$('command').value.trim(),root=$('search-results');root.replaceChildren();firstAction=null;const result=(title,subtitle,fn)=>{const b=button('',fn,'result');b.append(text('span',title),text('small',subtitle));root.append(b);if(!firstAction)firstAction=fn};if(!q){result('Открыть настройки','Внешний вид, приложения и горячие клавиши',()=>showTab('settings'));result('Таймер на 25 минут','Пора сосредоточиться',()=>{startTimer(25);showTab('home')});return}settings.items.forEach((a,i)=>{if(a.name.toLowerCase().includes(q.toLowerCase()))result(a.name,a.group||a.target,()=>run(api.launch(i)))});if(/^[\d\s()+*/.,%×÷-]+$/.test(q)){try{const v=OrbitCore.calculate(q);result('= '+v,'Нажми, чтобы скопировать',()=>run(api.copy(String(v)),()=>message('Скопировано')))}catch{}}const timer=q.match(/^таймер\s+(\d+(?:[.,]\d+)?)\s*(?:мин(?:ут[аы]?)?|м)?$/i);if(timer)result('Запустить таймер на '+timer[1]+' мин','Таймер останется на островке',()=>{startTimer(Number(timer[1].replace(',','.')));showTab('home')});const reminder=q.match(/^напомни\s+через\s+(\d+)\s*(мин(?:ут[аы]?)?|ч(?:ас[аов]*)?)\s+(.+)$/i);if(reminder)result('Напомнить: '+reminder[3],'Через '+reminder[1]+' '+reminder[2],()=>run(api.reminder('add',{text:reminder[3],at:Date.now()+Number(reminder[1])*(reminder[2].startsWith('ч')?3600000:60000)}),list=>{state.reminders=list;message('Напоминание добавлено')}));const controls={wifi:'wifi','wi-fi':'wifi',bluetooth:'bluetooth',vpn:'vpn',звук:'sound',тема:'theme'};if(controls[q.toLowerCase()])result('Открыть '+q,'Параметры Windows',()=>run(api.systemLink(controls[q.toLowerCase()])));result('Поиск: '+q,'Открыть в браузере',()=>run(api.web('https://www.google.com/search?q='+encodeURIComponent(q))))}$('command').oninput=renderSearch;$('command').onkeydown=e=>{if(e.key==='Enter'&&firstAction){e.preventDefault();firstAction()}};
-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('eq-dialog').open&&!$('power-dialog').open){if(miniOpen)setCompactPlayer(false);else expand(false)}});matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>settings&&applyAppearance());const clockFormat=new Intl.DateTimeFormat('ru-RU',{hour:'2-digit',minute:'2-digit'});function clock(){setText($('clock'),clockFormat.format(new Date()));if(state?.timer||recordStart||!$('pill-status').hidden)renderTimer()}setInterval(clock,1000);run(api.get(),r=>{settings=r.settings;state=r.state;steamDownload=r.steamDownload||'';renderTimer();systemLabel=r.systemLabel||'Windows';displays=r.displays;applyPlatformLabels();applyAppearance();renderApps();renderSystem();clock();$('weather-city').value=weatherCity;refreshWeather(weatherCity);if(r.hotkeys?.length)message('Недоступны сочетания: '+r.hotkeys.join(', '))});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!$('eq-dialog').open&&!$('power-dialog').open){if(miniOpen)setCompactPlayer(false);else expand(false)}});matchMedia('(prefers-color-scheme: light)').addEventListener('change',()=>settings&&applyAppearance());const clockFormat=new Intl.DateTimeFormat('ru-RU',{hour:'2-digit',minute:'2-digit'});function clock(){setText($('clock'),clockFormat.format(new Date()));if(state?.timer||recordStart||!$('pill-status').hidden)renderTimer()}setInterval(clock,1000);run(api.get(),r=>{settings=r.settings;state=r.state;steamDownload=r.steamDownload||'';renderTimer();systemLabel=r.systemLabel||'Windows';waylandRecording=Boolean(r.waylandRecording);if(waylandRecording){const audio=document.getElementById("record-audio");audio.checked=false;audio.disabled=true;audio.title="Системный звук в режиме Wayland пока недоступен";}displays=r.displays;applyPlatformLabels();applyAppearance();renderApps();renderSystem();clock();$('weather-city').value=weatherCity;refreshWeather(weatherCity);if(r.hotkeys?.length)message('Недоступны сочетания: '+r.hotkeys.join(', '))});
 
 const audioLevel = $('audio-level');
 const audioDevice = $('audio-device');

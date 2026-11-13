@@ -66,6 +66,7 @@
 #elif defined(Q_OS_LINUX)
 #include "x11_input.h"
 #include "portal_screenshot.h"
+#include "wayland_video_encoder.h"
 #include "portal_shortcuts.h"
 #include "dictation.h"
 #include <QDBusConnection>
@@ -1971,6 +1972,44 @@ private:
     }
 
     using Respond = std::function<void(QJsonValue)>;
+
+#ifdef Q_OS_LINUX
+    void startWaylandRecording(const Respond &respond)
+    {
+        if (recordFile_ || waylandPortal_) {
+            respond(error(QStringLiteral("Запись уже открыта")));
+            return;
+        }
+        waylandPortal_ = new PortalScreencast(this);
+        connect(waylandPortal_, &PortalScreencast::closed, this, [this] { waylandEncoder_.stop(); });
+        waylandPortal_->start([this, respond](PortalScreenStream stream, QString issue) {
+            if (issue.isEmpty()) {
+                const auto result = beginRecording("video/webm");
+                if (result.isObject()) issue = result.toObject().value("error").toString();
+            }
+            if (issue.isEmpty()) {
+                issue = waylandEncoder_.start(std::move(stream), recordFile_->fileName(), [this](QString failure) {
+                    auto *portal = std::exchange(waylandPortal_, nullptr);
+                    portal->deleteLater();
+                    if (!failure.isEmpty()) recordFile_.reset();
+                    const auto result = failure.isEmpty() ? saveRecording() : QJsonValue(error(failure));
+                    recording_ = false;
+                    refreshMemoryTarget();
+                    emitTo(main_, "wayland-recording-finished", result);
+                });
+            }
+            if (!issue.isEmpty()) {
+                recordFile_.reset();
+                if (auto *portal = std::exchange(waylandPortal_, nullptr)) portal->deleteLater();
+                respond(error(issue));
+                return;
+            }
+            recording_ = true;
+            refreshMemoryTarget();
+            respond(true);
+        });
+    }
+#endif
     void visible(webview_t window, bool show)
     {
         if (!window) return;
@@ -2419,6 +2458,7 @@ private:
             }
             respond(QJsonObject{{"settings", settings_}, {"state", state_}, {"version", ORBIT_VERSION},
                     {"systemLabel", system}, {"platform", system == "Windows" ? "win32" : "linux"},
+                    {"waylandRecording", system == "Linux" && QGuiApplication::platformName().startsWith("wayland")},
                     {"gpuAccelerationActive", gpuEnabled_}, {"displays", displays}, {"hotkeys", unavailableHotkeys_},
                     {"steamDownload", steamDownload_}});
             if (window == preferences_) {
@@ -2494,13 +2534,21 @@ private:
             else respond(true);
         } else if (command == "weather") {
             weather(first.toString(), respond);
+#ifdef Q_OS_LINUX
+        } else if (command == "wayland-record-start" && window == main_ &&
+                   QGuiApplication::platformName().startsWith("wayland")) {
+            startWaylandRecording(respond);
+        } else if (command == "wayland-record-stop" && window == main_ && recording_ && waylandPortal_) {
+            QTimer::singleShot(0, this, [this] { waylandEncoder_.stop(); });
+            respond(true);
+#endif
         } else if (command == "record-begin" && window == main_) {
             respond(beginRecording(first.toString()));
         } else if (command == "record-chunk" && window == main_) {
             respond(writeRecording(first.toString()));
         } else if (command == "record-finish" && window == main_) {
             QTimer::singleShot(0, this, [this, respond] { respond(saveRecording()); });
-        } else if (command == "record-discard" && window == main_) {
+        } else if (command == "record-discard" && window == main_ && !recording_) {
             recordFile_.reset();
             respond(true);
         } else if (command == "record-state" && window == main_) {
@@ -2717,6 +2765,10 @@ private:
     bool recording_ = false;
     QString recordExtension_;
     std::unique_ptr<QTemporaryFile> recordFile_;
+#ifdef Q_OS_LINUX
+    PortalScreencast *waylandPortal_ = nullptr;
+    WaylandVideoEncoder waylandEncoder_;
+#endif
     QUrl coverUrl_;
     QString fetchedCover_;
     quint64 coverRequest_ = 0;

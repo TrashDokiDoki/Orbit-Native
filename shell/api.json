@@ -35,6 +35,8 @@
     "color": "color",
     "qr": "qr",
     "recordState": "record-state",
+    "waylandRecordStart": "wayland-record-start",
+    "waylandRecordStop": "wayland-record-stop",
     "weather": "weather",
     "dataExport": "data-export",
     "dataFolder": "data-folder",
@@ -61,6 +63,7 @@
     "onAlarm": "alarm",
     "onHotkeys": "hotkeys",
     "onRecording": "recording",
+    "onWaylandRecordingFinished": "wayland-recording-finished",
     "onRecordToggle": "record-toggle",
     "onCapture": "capture"
   }
