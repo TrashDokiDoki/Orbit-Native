@@ -495,6 +495,7 @@ body.light .home-dashboard { --player-surface: #f0eef3; --player-line: #201b2c21
     var(--input);
 }
 #island select:disabled { opacity: .6; }
+#note-select { min-height: 30.8px; }
 #eq-open { padding: 4px 7px; color: var(--accent); font-size: 17px; }
 #eq-dialog {
   width: min(490px, 94%);
