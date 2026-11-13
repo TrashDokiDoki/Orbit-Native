@@ -107,6 +107,11 @@ jobs:
           git -C "$RUNNER_TEMP/orbit-wlr-source" checkout --detach FETCH_HEAD
           # The release omits the header declaring close() on Ubuntu 24.04.
           sed -i '1i#include <unistd.h>' "$RUNNER_TEMP/orbit-wlr-source/src/screencast/wlr_screencast.c"
+          # Permit the screencopy SHM path when headless Sway has no DMA-BUF global.
+          source_file="$RUNNER_TEMP/orbit-wlr-source/src/screencast/wlr_screencast.c"
+          grep -Fq '} else if (ctx->screencopy_manager && ctx->linux_dmabuf) {' "$source_file"
+          sed -i '/} else if (ctx->screencopy_manager \&\& ctx->linux_dmabuf) {/i\	} else if (ctx->screencopy_manager \&\& !ctx->linux_dmabuf) {\n		logprint(DEBUG, "wayland: using wlr_screencopy with shared memory");' "$source_file"
+          grep -Fq 'using wlr_screencopy with shared memory' "$source_file"
           meson setup "$RUNNER_TEMP/orbit-wlr-build" "$RUNNER_TEMP/orbit-wlr-source"
           meson compile -C "$RUNNER_TEMP/orbit-wlr-build"
           dbus-run-session -- bash -euo pipefail <<'EOF'
