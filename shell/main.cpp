@@ -1276,7 +1276,14 @@ private:
 #endif
         if (lastWindowSize_ != size) {
             lastWindowSize_ = size;
+#ifdef Q_OS_WIN
+            // Match the original frameless window's physical-pixel rounding.
+            const UINT dpi = GetDpiForWindow(hwnd);
+            SetWindowPos(hwnd, nullptr, 0, 0, MulDiv(size.width(), dpi, 96), MulDiv(size.height(), dpi, 96),
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+#else
             webview_set_size(main_, size.width(), size.height(), WEBVIEW_HINT_FIXED);
+#endif
         }
         const auto position = settings_.value("position").toString();
 #ifdef Q_OS_WIN
