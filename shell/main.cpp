@@ -699,9 +699,15 @@ private:
                 }
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) webview_init(window, "window.orbitStrictMediaTest = true;");
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_AUDIO")) webview_init(window, "window.orbitStrictAudioTest = true;");
+                if (qEnvironmentVariableIsSet("ORBIT_TEST_EXPECT_WAYLAND"))
+                    webview_init(window, "window.orbitExpectWayland = true;");
                 webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
                   const initial = await orbit.get();
+                  if (window.orbitExpectWayland && initial?.waylandRecording !== true) {
+                    window.orbitShellTest(false, {stage:'Wayland backend', waylandRecording:initial?.waylandRecording});
+                    return;
+                  }
                   await orbit.expand(true);
                   const notes = [{id:'qa',name:'Orbit QA',folder:'Local',text:'Save and load'}];
                   await orbit.notesSave(notes);
