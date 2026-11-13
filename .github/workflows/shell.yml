@@ -144,7 +144,7 @@ jobs:
           done
           cat "$RUNNER_TEMP/orbit-record.log"
           grep -q 'record button ready' "$RUNNER_TEMP/orbit-record.log"
-          wtype -k Return
+          wtype -s 400 -k Return
           if ! wait "$recorder"; then
             cat "$RUNNER_TEMP/orbit-record.log"
             exit 1

@@ -662,7 +662,7 @@ private:
                             }
                         }, 100);
                         const focus = setInterval(() => {
-                            if (!state || !document.hasFocus()) return;
+                            if (!state) return;
                             if (document.querySelector('#panel').inert) { expand(true); return; }
                             if (tab !== 'tools') showTab('tools');
                             button.focus();
