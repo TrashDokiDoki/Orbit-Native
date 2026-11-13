@@ -105,6 +105,8 @@ jobs:
           git init "$RUNNER_TEMP/orbit-wlr-source"
           git -C "$RUNNER_TEMP/orbit-wlr-source" fetch --depth 1 https://github.com/emersion/xdg-desktop-portal-wlr.git 34153094662acd713241ca6cbbb20003ef67da5f
           git -C "$RUNNER_TEMP/orbit-wlr-source" checkout --detach FETCH_HEAD
+          # The release omits the header declaring close() on Ubuntu 24.04.
+          sed -i '1i#include <unistd.h>' "$RUNNER_TEMP/orbit-wlr-source/src/screencast/wlr_screencast.c"
           meson setup "$RUNNER_TEMP/orbit-wlr-build" "$RUNNER_TEMP/orbit-wlr-source"
           meson compile -C "$RUNNER_TEMP/orbit-wlr-build"
           dbus-run-session -- bash -euo pipefail <<'EOF'
