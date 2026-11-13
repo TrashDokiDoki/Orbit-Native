@@ -36,6 +36,7 @@
 #include <QSettings>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <optional>
 #include <QTemporaryDir>
 #include <QSysInfo>
 #include <QSystemTrayIcon>
@@ -733,8 +734,8 @@ private:
                   else {
                     const recorder = await orbit.recordStream.begin('video/webm');
                     const fragment = recorder === true && await orbit.recordStream.chunk(new Blob([new Uint8Array([0x1a,0x45,0xdf,0xa3])]));
-                    await orbit.recordStream.discard();
-                    if (fragment !== true) { window.orbitShellTest(false, {stage:'record stream', fragment}); return; }
+                    const saved = fragment === true && await orbit.recordStream.finish();
+                    if (!saved?.saved) { window.orbitShellTest(false, {stage:'record stream', fragment, saved}); return; }
                     await orbitShellTrace('open capture editor');
                     const capture = await orbit.capture('edit');
                     if (capture?.error) window.orbitShellTest(false, {stage:'capture', capture});
@@ -1864,7 +1865,13 @@ private:
             return error(QStringLiteral("Запись экрана пуста"));
         const QDir videos(QStandardPaths::writableLocation(QStandardPaths::MoviesLocation));
         const auto filename = "Orbit-" + QDateTime::currentDateTime().toString("yyyyMMdd-hhmmss") + '.' + recordExtension_;
-        const auto path = QFileDialog::getSaveFileName(nullptr, QStringLiteral("Сохранить запись Orbit"),
+        std::optional<QTemporaryDir> testOutput;
+        if (testing_) {
+            testOutput.emplace();
+            if (!testOutput->isValid()) return error(QStringLiteral("Не удалось создать тестовую папку"));
+        }
+        const auto path = testing_ ? QDir(testOutput->path()).filePath(filename) :
+            QFileDialog::getSaveFileName(nullptr, QStringLiteral("Сохранить запись Orbit"),
                                                       videos.filePath(filename), recordExtension_.toUpper() + " (*." + recordExtension_ + ')');
         if (path.isEmpty()) return QJsonObject{{"saved", false}};
         QSaveFile output(path);
@@ -1875,6 +1882,11 @@ private:
                 return error(QStringLiteral("Не удалось сохранить запись"));
         }
         if (!output.commit()) return error(QStringLiteral("Не удалось сохранить запись"));
+        if (testing_) {
+            QFile saved(path);
+            if (!saved.open(QIODevice::ReadOnly) || saved.readAll() != QByteArray::fromHex("1a45dfa3"))
+                return error(QStringLiteral("Тестовая запись не совпадает с исходными данными"));
+        }
         return QJsonObject{{"saved", true}};
     }
 
