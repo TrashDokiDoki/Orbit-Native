@@ -36,6 +36,7 @@
 #include <QSettings>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QIcon>
@@ -165,6 +166,14 @@ public:
 #endif
             return 2;
         }
+        if (testing_ && !testSteamDownload()) {
+            qWarning("Orbit smoke: Steam progress fixture failed");
+            webview_destroy(main_);
+#ifdef Q_OS_LINUX
+            gtk_widget_destroy(mainGtkWindow_);
+#endif
+            return 3;
+        }
         resize(false);
         visible(main_, true);
         media_.changed = [this](const Track &track) { updateMedia(track); };
@@ -177,7 +186,7 @@ public:
 #endif
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
-            connect(&steamPoll_, &QTimer::timeout, this, &OrbitShellController::refreshSteamDownload);
+            connect(&steamPoll_, &QTimer::timeout, this, [this] { refreshSteamDownload(); });
             steamPoll_.start(5000);
             refreshSteamDownload();
             updateKeyboard();
@@ -370,7 +379,7 @@ private:
     }
 #endif
 
-    void refreshSteamDownload()
+    void refreshSteamDownload(const QString &testRoot = {})
     {
         QStringList roots;
 #ifdef Q_OS_WIN
@@ -383,12 +392,15 @@ private:
                  home.filePath(".var/app/com.valvesoftware.Steam/data/Steam")};
 #endif
         QString progress;
+        if (!testRoot.isEmpty()) roots = {testRoot};
         for (const auto &root : roots) {
             if (root.isEmpty()) continue;
             const QDir directory(root);
             QFile log(directory.filePath("logs/content_log.txt"));
             const auto now = QDateTime::currentDateTime();
-            const auto age = QFileInfo(log).lastModified().secsTo(now);
+            const auto modified = QFileInfo(log).lastModified();
+            if (!modified.isValid()) continue;
+            const auto age = modified.secsTo(now);
             if (age < 0 || age > 120 || !log.open(QIODevice::ReadOnly)) continue;
             if (!log.seek(qMax(qint64{0}, log.size() - 65536))) continue;
             static const QRegularExpression event(R"(^\[([^\]]+)\] AppID (\d+) (.+)$)");
@@ -437,6 +449,27 @@ private:
         steamDownload_ = progress;
         applyBounds();
         if (mainReady_) emitTo(main_, "steam-download", steamDownload_);
+    }
+
+    bool testSteamDownload()
+    {
+        QTemporaryDir fixture;
+        const QDir root(fixture.path());
+        if (!fixture.isValid() || !root.mkpath("logs") || !root.mkpath("steamapps")) return false;
+        const auto timestamp = QDateTime::currentDateTime().toString("[yyyy-MM-dd HH:mm:ss] ").toUtf8();
+        QFile log(root.filePath("logs/content_log.txt"));
+        QFile manifest(root.filePath("steamapps/appmanifest_123.acf"));
+        if (!log.open(QIODevice::WriteOnly) || !manifest.open(QIODevice::WriteOnly)) return false;
+        log.write(timestamp + "AppID 123 update started : download 0/100\n");
+        manifest.write("\"BytesToDownload\" \"100\"\n\"BytesDownloaded\" \"37\"\n");
+        log.close();
+        manifest.close();
+        refreshSteamDownload(fixture.path());
+        if (steamDownload_ != QStringLiteral("↓ Steam 37%") || !log.open(QIODevice::Append)) return false;
+        log.write(timestamp + "AppID 123 finished update, 1 mounted depots\n");
+        log.close();
+        refreshSteamDownload(fixture.path());
+        return steamDownload_.isEmpty();
     }
 
     void updateKeyboard()
