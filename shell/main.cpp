@@ -709,11 +709,17 @@ private:
                 }
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) webview_init(window, "window.orbitStrictMediaTest = true;");
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_AUDIO")) webview_init(window, "window.orbitStrictAudioTest = true;");
+                if (qEnvironmentVariableIsSet("ORBIT_TEST_SOFTWARE_RENDERING"))
+                    webview_init(window, "window.orbitTestSoftwareRendering = true;");
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_EXPECT_WAYLAND"))
                     webview_init(window, "window.orbitExpectWayland = true;");
                 webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
                   const initial = await orbit.get();
+                  if (window.orbitTestSoftwareRendering && initial?.gpuAccelerationActive !== false) {
+                    window.orbitShellTest(false, {stage:'software rendering'});
+                    return;
+                  }
                   if (window.orbitExpectWayland && initial?.waylandRecording !== true) {
                     window.orbitShellTest(false, {stage:'Wayland backend', waylandRecording:initial?.waylandRecording});
                     return;

@@ -332,6 +332,16 @@ jobs:
           $test = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru
           if (!$test.WaitForExit(30000)) { Stop-Process -Id $test.Id; throw 'Smoke test timed out' }
           if ($test.ExitCode -ne 0) { throw "Smoke test exit code $($test.ExitCode)" }
+          if ('${{ matrix.arch }}' -eq 'x64') {
+            $env:ORBIT_TEST_SOFTWARE_RENDERING = '1'
+            try {
+              $softwareTest = Start-Process -FilePath $exe -ArgumentList '--smoke-test' -WindowStyle Hidden -PassThru
+              if (!$softwareTest.WaitForExit(30000)) { Stop-Process -Id $softwareTest.Id; throw 'Software rendering smoke test timed out' }
+              if ($softwareTest.ExitCode -ne 0) { throw "Software rendering smoke test exit code $($softwareTest.ExitCode)" }
+            } finally {
+              Remove-Item Env:ORBIT_TEST_SOFTWARE_RENDERING
+            }
+          }
           $remove = Start-Process -FilePath (Join-Path $dest 'Uninstall.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
           if ($remove.ExitCode -ne 0 -or (Test-Path $exe)) { throw 'Uninstall failed' }
       - uses: actions/upload-artifact@v4
