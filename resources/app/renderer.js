@@ -130,8 +130,8 @@ function updatePlayback() {
   const track = system.media;
   const position = playbackPosition(track);
   $('track-progress').style.width = position === null ? '0%' : (position / track.duration * 100) + '%';
-  $('track-elapsed').textContent = duration(Math.floor(position || 0) * 1000);
-  $('track-duration').textContent = track?.duration > 0 ? duration(Math.floor(track.duration) * 1000) : '—:—';
+  setText($('track-elapsed'), duration(Math.floor(position || 0) * 1000));
+  setText($('track-duration'), track?.duration > 0 ? duration(Math.floor(track.duration) * 1000) : '—:—');
   const root = $('lyrics');
   if (root.hidden || !lyricLines.length) return;
   const index = position === null ? -1 : lyricLines.findLastIndex(line => line.at <= position);
