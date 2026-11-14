@@ -724,6 +724,9 @@ private:
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_EXPECT_WAYLAND"))
                     webview_init(window, "window.orbitExpectWayland = true;");
 #ifdef Q_OS_LINUX
+                if (qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) {
+                    webview_init(window, "window.orbitExpectKeyboardLayout = true;");
+                }
                 if (x11_ && qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) {
                     webview_bind(window, "orbitTestSetGermanLayout", [](const char *id, const char *, void *context) {
                         const bool started = QProcess::startDetached("setxkbmap", {"de"});
@@ -734,10 +737,10 @@ private:
                 webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
                   const initial = await orbit.get();
-                  if (window.orbitTestSetGermanLayout) {
+                  if (window.orbitExpectKeyboardLayout) {
                     let changed;
                     orbit.onLayout(label => { changed = label; });
-                    const started = await window.orbitTestSetGermanLayout();
+                    const started = await window.orbitTestSetGermanLayout?.();
                     const displayed = () => document.querySelector('#system-status').textContent.includes('DE');
                     for (let i = 0; started && i < 40 && (changed !== 'DE' || !displayed()); ++i)
                       await new Promise(resolve => setTimeout(resolve, 75));
