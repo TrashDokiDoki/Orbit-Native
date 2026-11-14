@@ -79,7 +79,7 @@ run(api.updateStatus(), renderUpdateBadge);
 $('pill').addEventListener('mouseenter',()=>{if(settings?.hover&&!settings.clickThrough&&!open&&!miniOpen&&!(system.restricted&&settings.ruleMode==='manual')&&!(system.media?.playing&&settings.musicMode==='mini'))hoverTimeout=setTimeout(()=>expand(true),settings.hoverDelay)});$('pill').addEventListener('mouseleave',()=>clearTimeout(hoverTimeout));$('pill').addEventListener('wheel',e=>{e.preventDefault();run(api.native('volume',{command:e.deltaY<0?'up':'down'}),()=>changeAudio('status'))},{passive:false});document.addEventListener('pointermove',e=>{const x=Math.max(-2,Math.min(2,(e.clientX-innerWidth/2)/60)),y=Math.max(-2,Math.min(2,e.clientY/60-1));$('mascot').style.setProperty('--eye-x',x+'px');$('mascot').style.setProperty('--eye-y',y+'px')});
 function applyAppearance(){document.documentElement.style.setProperty('--user-accent',settings.accent);document.body.classList.toggle('light',settings.theme==='light'||settings.theme==='system'&&matchMedia('(prefers-color-scheme: light)').matches);document.body.dataset.position = settings.position;document.body.dataset.shape = settings.shape;document.body.dataset.musicMode=settings.musicMode;applyModules();updateMascot();if(settings.musicMode!=='mini'&&miniOpen)setCompactPlayer(false);$('shortcut-hint').textContent=settings.shortcut||'Control+Alt+I';applyTrackAccent();renderCompactMedia();syncPanelWork();if(lastForecast)checkRain(lastForecast)}
 async function displayFileIcon(slot, file) {
-  if (!/^(?:[a-z]:[\\/]|\/)/i.test(file)) return;
+  if (!/^(?:[a-z]:[\\/]|\/|\\\\)/i.test(file)) return;
   try {
     const source = await api.fileIcon(file);
     if (!slot.isConnected || typeof source !== 'string' || !source.startsWith('data:image/png;')) return;
