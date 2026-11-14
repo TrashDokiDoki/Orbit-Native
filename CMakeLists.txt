@@ -57,6 +57,7 @@ if(ORBIT_WEB_SHELL)
         pkg_check_modules(OrbitGStreamer REQUIRED IMPORTED_TARGET gstreamer-1.0)
         find_package(X11 REQUIRED COMPONENTS Xtst)
         set_target_properties(OrbitShell PROPERTIES AUTOMOC ON)
+        target_compile_definitions(OrbitShell PRIVATE ORBIT_KWIN_LAYOUT_DBUS)
         target_sources(OrbitShell PRIVATE shell/x11_input.cpp shell/portal_request.cpp
             shell/portal_screenshot.cpp shell/portal_shortcuts.cpp shell/portal_screencast.cpp shell/wayland_video_encoder.cpp shell/dictation.cpp)
         target_link_libraries(OrbitShell PRIVATE Qt6::DBus PkgConfig::OrbitPulse PkgConfig::OrbitLayerShell PkgConfig::OrbitGStreamer X11::X11 X11::Xtst)

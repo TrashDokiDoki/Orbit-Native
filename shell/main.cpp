@@ -105,7 +105,7 @@ QJsonObject object(const QString &file)
 QJsonObject error(const QString &text) { return {{"error", text}}; }
 
 class OrbitShellController final : public QObject {
-#ifdef Q_OS_LINUX
+#ifdef ORBIT_KWIN_LAYOUT_DBUS
     Q_OBJECT
 #endif
 public:
@@ -538,7 +538,7 @@ private:
         return steamDownload_.isEmpty();
     }
 
-#ifdef Q_OS_LINUX
+#ifdef ORBIT_KWIN_LAYOUT_DBUS
     Q_SLOT void refreshKdeLayout()
     {
         const auto revision = ++kdeLayoutRevision_;
@@ -2978,6 +2978,6 @@ int main(int argc, char *argv[])
     return shell.run();
 }
 
-#ifdef Q_OS_LINUX
+#ifdef ORBIT_KWIN_LAYOUT_DBUS
 #include "main.moc"
 #endif
