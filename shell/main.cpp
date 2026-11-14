@@ -72,6 +72,8 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusPendingCall>
+#include <QDBusPendingCallWatcher>
+#include <QDBusArgument>
 #include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
 #include <gdk/gdkx.h>
@@ -205,9 +207,15 @@ public:
 #endif
         if (!testing_) {
 #ifdef Q_OS_LINUX
-            if (wayland_)
+            if (wayland_) {
                 portalShortcuts_ = std::make_unique<PortalShortcuts>(this);
-            else if (x11_) x11Input_ = std::make_unique<X11Input>();
+                if (qEnvironmentVariable("XDG_CURRENT_DESKTOP").split(':').contains("KDE", Qt::CaseInsensitive)) {
+                    auto *layoutPoll = new QTimer(this);
+                    connect(layoutPoll, &QTimer::timeout, this, &OrbitShellController::refreshKdeLayout);
+                    layoutPoll->start(2500);
+                    refreshKdeLayout();
+                }
+            } else if (x11_) x11Input_ = std::make_unique<X11Input>();
 #endif
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
@@ -515,6 +523,46 @@ private:
         return steamDownload_.isEmpty();
     }
 
+#ifdef Q_OS_LINUX
+    void refreshKdeLayout()
+    {
+        const auto bus = QDBusConnection::sessionBus();
+        auto query = [](const QString &method) {
+            return QDBusMessage::createMethodCall("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts", method);
+        };
+        auto *active = new QDBusPendingCallWatcher(bus.asyncCall(query("getLayout"), 1000), this);
+        connect(active, &QDBusPendingCallWatcher::finished, this, [this, active, bus, query] {
+            const auto reply = active->reply();
+            active->deleteLater();
+            if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) return;
+            const auto index = reply.arguments().first().toUInt();
+            auto *layouts = new QDBusPendingCallWatcher(bus.asyncCall(query("getLayoutsList"), 1000), this);
+            connect(layouts, &QDBusPendingCallWatcher::finished, this, [this, layouts, index] {
+                const auto reply = layouts->reply();
+                layouts->deleteLater();
+                if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) return;
+                const auto value = reply.arguments().first();
+                if (value.metaType() != QMetaType::fromType<QDBusArgument>()) return;
+                const auto list = value.value<QDBusArgument>();
+                if (list.currentSignature() != "a(sss)") return;
+                list.beginArray();
+                QString label;
+                for (uint i = 0; !list.atEnd(); ++i) {
+                    QString name, display, description;
+                    list.beginStructure();
+                    list >> name >> display >> description;
+                    list.endStructure();
+                    if (i != index) continue;
+                    label = display.isEmpty() ? name.toUpper() : display;
+                }
+                list.endArray();
+                kdeLayoutLabel_ = label == "US" || label == "GB" ? QStringLiteral("EN") : label;
+                updateKeyboard();
+            });
+        });
+    }
+#endif
+
     void updateKeyboard()
     {
         int layout = 0;
@@ -549,6 +597,8 @@ private:
         if (x11Input_) {
             std::tie(layout, label) = x11Input_->layout();
             updateX11Visibility();
+        } else if (wayland_) {
+            label = kdeLayoutLabel_;
         }
 #endif
         if (keyboardKnown_ && caps == caps_ && layout == layout_ && label == layoutLabel_ && inactive == inactive_ &&
@@ -2843,6 +2893,9 @@ private:
 #endif
     int layout_ = 0;
     QString layoutLabel_;
+#ifdef Q_OS_LINUX
+    QString kdeLayoutLabel_;
+#endif
     bool caps_ = false;
     bool inactive_ = false;
     bool keyboardKnown_ = false;
