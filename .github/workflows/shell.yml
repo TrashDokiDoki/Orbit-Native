@@ -79,6 +79,14 @@ jobs:
           echo "dcfea5712c43a43ba7ae8083afb39d36993e5a69c46e88b68aaa72b65cb615bb  $RUNNER_TEMP/dictation.wav" | sha256sum -c
           sox "$RUNNER_TEMP/dictation.wav" -r 16000 -c 1 -e signed-integer -b 16 -L -t raw "$RUNNER_TEMP/dictation.pcm"
           ORBIT_TEST_AUDIO=1 ORBIT_TEST_DICTATION_PCM="$RUNNER_TEMP/dictation.pcm" xvfb-run -a OrbitShell --smoke-test
+      - name: Check the keyboard layout indicator on X11
+        if: matrix.arch == 'x64'
+        run: |
+          sudo apt-get install -y x11-xkb-utils
+          QT_QPA_PLATFORM=xcb GDK_BACKEND=x11 ORBIT_TEST_KEYBOARD_LAYOUT=1 xvfb-run -a -s '-screen 0 1280x960x24 -noreset' bash -ec '
+            setxkbmap us
+            OrbitShell --smoke-test
+          '
       - name: Launch the installed package on Wayland
         if: matrix.arch == 'x64'
         run: |

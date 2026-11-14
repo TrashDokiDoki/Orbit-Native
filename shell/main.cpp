@@ -195,6 +195,14 @@ public:
 #endif
         media_.changed = [this](const Track &track) { updateMedia(track); };
         if (!testing_ || qEnvironmentVariableIsSet("ORBIT_TEST_MEDIA")) media_.refresh();
+#ifdef Q_OS_LINUX
+        if (testing_ && x11_ && qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) {
+            x11Input_ = std::make_unique<X11Input>();
+            updateKeyboard();
+            connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
+            keyboardPoll_.start(500);
+        }
+#endif
         if (!testing_) {
 #ifdef Q_OS_LINUX
             if (wayland_)
@@ -715,9 +723,29 @@ private:
                     webview_init(window, "window.orbitTestSoftwareRendering = true;");
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_EXPECT_WAYLAND"))
                     webview_init(window, "window.orbitExpectWayland = true;");
+#ifdef Q_OS_LINUX
+                if (x11_ && qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) {
+                    webview_bind(window, "orbitTestSetGermanLayout", [](const char *id, const char *, void *context) {
+                        const bool started = QProcess::startDetached("setxkbmap", {"de"});
+                        webview_return(static_cast<webview_t>(context), id, 0, started ? "true" : "false");
+                    }, window);
+                }
+#endif
                 webview_init(window, R"JS(
                 document.addEventListener('DOMContentLoaded', async () => {
                   const initial = await orbit.get();
+                  if (window.orbitTestSetGermanLayout) {
+                    let changed;
+                    orbit.onLayout(label => { changed = label; });
+                    const started = await window.orbitTestSetGermanLayout();
+                    const displayed = () => document.querySelector('#system-status').textContent.includes('DE');
+                    for (let i = 0; started && i < 40 && (changed !== 'DE' || !displayed()); ++i)
+                      await new Promise(resolve => setTimeout(resolve, 75));
+                    if (changed !== 'DE' || !displayed()) {
+                      window.orbitShellTest(false, {stage:'keyboard layout', changed});
+                      return;
+                    }
+                  }
                   if (window.orbitTestSoftwareRendering && initial?.gpuAccelerationActive !== false) {
                     window.orbitShellTest(false, {stage:'software rendering'});
                     return;
