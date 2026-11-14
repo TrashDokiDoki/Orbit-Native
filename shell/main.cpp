@@ -2277,6 +2277,16 @@ private:
         visible(main_, false);
 #ifdef Q_OS_WIN
         auto hwnd = static_cast<HWND>(webview_get_window(editor_));
+        if (!SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE))
+            qWarning("Orbit: could not exclude the capture editor from capture (%lu)", GetLastError());
+        if (testing_) {
+            DWORD affinity = WDA_NONE;
+            if (!GetWindowDisplayAffinity(hwnd, &affinity) || affinity == WDA_NONE) {
+                closeCapture();
+                done(error(QStringLiteral("Редактор снимков не защищён от захвата")));
+                return;
+            }
+        }
         auto style = GetWindowLongPtrW(hwnd, GWL_STYLE);
         SetWindowLongPtrW(hwnd, GWL_STYLE, (style & ~(WS_CAPTION | WS_THICKFRAME)) | WS_POPUP);
         MONITORINFO monitor{sizeof(MONITORINFO)};
