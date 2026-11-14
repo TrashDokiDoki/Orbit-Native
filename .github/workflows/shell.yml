@@ -106,7 +106,8 @@ jobs:
             /usr/bin/python3 shell/tests/mpris_fixture.py "file://$PWD/resources/app/icon.png" &
             fixture=$!
             trap "kill $fixture" EXIT
-            ORBIT_TEST_EXPECT_WAYLAND=1 ORBIT_TEST_PORTAL=1 OrbitShell --smoke-test
+            gdbus wait --session --timeout 10 org.kde.keyboard
+            XDG_CURRENT_DESKTOP=KDE ORBIT_TEST_KEYBOARD_LAYOUT=1 ORBIT_TEST_EXPECT_WAYLAND=1 ORBIT_TEST_PORTAL=1 OrbitShell --smoke-test
             # Qt may use Xwayland while the GTK window runs on Wayland.
             QT_QPA_PLATFORM=xcb ORBIT_TEST_EXPECT_WAYLAND=1 ORBIT_TEST_PORTAL=1 xvfb-run -a OrbitShell --smoke-test
           '

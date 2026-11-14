@@ -18,6 +18,28 @@ player_name = dbus.service.BusName("org.mpris.MediaPlayer2.OrbitFixture", bus=bu
 portal_name = dbus.service.BusName(DESKTOP, bus=bus)
 
 
+class Keyboard(dbus.service.Object):
+    active = 0
+    interface = "org.kde.KeyboardLayouts"
+
+    @dbus.service.method(interface, out_signature="u")
+    def getLayout(self):
+        return self.active
+
+    @dbus.service.method(interface, out_signature="a(sss)")
+    def getLayoutsList(self):
+        return [("us", "", "English"), ("de", "", "German")]
+
+    @dbus.service.signal(interface, signature="u")
+    def layoutChanged(self, index):
+        pass
+
+    @dbus.service.method(interface)
+    def switchToGerman(self):
+        self.active = 1
+        self.layoutChanged(self.active)
+
+
 class Fixture(dbus.service.Object):
     playing = True
 
@@ -79,4 +101,6 @@ with tempfile.TemporaryDirectory(prefix="orbit-portal-fixture-") as directory:
     )
     fixture = Fixture(player_name, "/org/mpris/MediaPlayer2")
     portal = Portal(portal_name, "/org/freedesktop/portal/desktop")
+    keyboard_name = dbus.service.BusName("org.kde.keyboard", bus=bus)
+    keyboard = Keyboard(keyboard_name, "/Layouts")
     GLib.MainLoop().run()

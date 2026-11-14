@@ -211,22 +211,27 @@ public:
 #endif
         if (!testing_) {
 #ifdef Q_OS_LINUX
-            if (wayland_) {
-                portalShortcuts_ = std::make_unique<PortalShortcuts>(this);
-                if (qEnvironmentVariable("XDG_CURRENT_DESKTOP").split(':').contains("KDE", Qt::CaseInsensitive)) {
-                    auto bus = QDBusConnection::sessionBus();
-                    bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
-                                "layoutChanged", this, SLOT(refreshKdeLayout()));
-                    bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
-                                "layoutsReconfigured", this, SLOT(refreshKdeLayout()));
-                    auto *watcher = new QDBusServiceWatcher("org.kde.keyboard", bus,
-                        QDBusServiceWatcher::WatchForOwnerChange, this);
-                    connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this,
-                            [this] { refreshKdeLayout(); });
-                    refreshKdeLayout();
-                }
-            } else if (x11_) x11Input_ = std::make_unique<X11Input>();
+            if (wayland_) portalShortcuts_ = std::make_unique<PortalShortcuts>(this);
+            else if (x11_) x11Input_ = std::make_unique<X11Input>();
 #endif
+        }
+#ifdef Q_OS_LINUX
+        if (wayland_ && (!testing_ || qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) &&
+            qEnvironmentVariable("XDG_CURRENT_DESKTOP").split(':').contains("KDE", Qt::CaseInsensitive)) {
+            updateKeyboard();
+            auto bus = QDBusConnection::sessionBus();
+            bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
+                        "layoutChanged", this, SLOT(refreshKdeLayout()));
+            bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
+                        "layoutsReconfigured", this, SLOT(refreshKdeLayout()));
+            auto *watcher = new QDBusServiceWatcher("org.kde.keyboard", bus,
+                QDBusServiceWatcher::WatchForOwnerChange, this);
+            connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this,
+                    [this] { refreshKdeLayout(); });
+            refreshKdeLayout();
+        }
+#endif
+        if (!testing_) {
             connect(&keyboardPoll_, &QTimer::timeout, this, &OrbitShellController::updateKeyboard);
             keyboardPoll_.start(500);
             connect(&steamPoll_, &QTimer::timeout, this, [this] { refreshSteamDownload(); });
@@ -794,9 +799,14 @@ private:
                 if (qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) {
                     webview_init(window, "window.orbitExpectKeyboardLayout = true;");
                 }
-                if (x11_ && qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) {
+                if ((x11_ || wayland_) && qEnvironmentVariableIsSet("ORBIT_TEST_KEYBOARD_LAYOUT")) {
                     webview_bind(window, "orbitTestSetGermanLayout", [](const char *id, const char *, void *context) {
-                        const bool started = QProcess::startDetached("setxkbmap", {"de"});
+                        const bool started = QProcess::startDetached(
+                            qEnvironmentVariableIsSet("ORBIT_TEST_EXPECT_WAYLAND") ? "gdbus" : "setxkbmap",
+                            qEnvironmentVariableIsSet("ORBIT_TEST_EXPECT_WAYLAND")
+                                ? QStringList{"call", "--session", "--dest", "org.kde.keyboard", "--object-path",
+                                              "/Layouts", "--method", "org.kde.KeyboardLayouts.switchToGerman"}
+                                : QStringList{"de"});
                         webview_return(static_cast<webview_t>(context), id, 0, started ? "true" : "false");
                     }, window);
                 }
