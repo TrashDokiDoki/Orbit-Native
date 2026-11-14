@@ -2406,9 +2406,16 @@ private:
         });
     }
 
-    void weather(const QString &city, const Respond &done)
+    void weather(const QString &city, const QJsonObject &location, const Respond &done)
     {
         if (testing_) { done(error("Network disabled in smoke test")); return; }
+        const double latitude = location.value("latitude").toDouble(181);
+        const double longitude = location.value("longitude").toDouble(181);
+        if (!location.value("name").toString().isEmpty() &&
+            std::abs(latitude) <= 90 && std::abs(longitude) <= 180) {
+            weatherForecast(location, done);
+            return;
+        }
         const auto name = city.section(',', 0, 0).simplified();
         if (name.compare(QStringLiteral("Красная Горбатка"), Qt::CaseInsensitive) == 0 ||
             name.compare(QStringLiteral("Красная Горбака"), Qt::CaseInsensitive) == 0) {
@@ -2589,7 +2596,7 @@ private:
             if (!persist()) { state_["notes"] = previous; respond(error(QStringLiteral("Не удалось сохранить заметки"))); }
             else respond(true);
         } else if (command == "weather") {
-            weather(first.toString(), respond);
+            weather(first.toString(), params.at(1).toObject(), respond);
 #ifdef Q_OS_LINUX
         } else if (command == "wayland-record-start" && window == main_ &&
                    wayland_) {

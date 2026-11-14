@@ -839,10 +839,19 @@ async function refreshWeather(city, manual = false) {
   if (manual && !lastForecast) $('weather-result').textContent = 'Загружаем прогноз…';
   $('weather-result').setAttribute('aria-busy', 'true');
   try {
-    const data = await api.weather(city);
+    let location;
+    try {
+      const cached = JSON.parse(localStorage.getItem('weather-location'));
+      if (cached?.city === city) location = cached.location;
+    } catch {}
+    const data = await api.weather(city, location);
     if (request !== weatherRequest) return;
     if (data.error) throw Error(data.error);
     if (!Number.isFinite(data.forecast?.current?.temperature_2m)) throw Error('Нет данных о температуре');
+    if (data.location) {
+      try { localStorage.setItem('weather-location', JSON.stringify({ city, location: data.location })); }
+      catch {}
+    }
     if (manual || !lastForecast) $('weather-form').hidden = true;
     if (manual) {
       message('');
