@@ -74,6 +74,7 @@ cmake --build build --target OrbitShell --parallel
 - В тестовом сеансе Ubuntu Desktop 24.04 x64 проверены открытие пакета из файлового менеджера через «Открыть с помощью», установка 0.3.1 с зависимостями через App Center и запуск из меню GNOME.
 - На Windows при масштабе 125% у Orbit 0.3.3 и Orbit Native совпали размеры и координаты основных блоков восьми вкладок, свёрнутого островка и окна настроек.
 - В Linux CI проверено, что смена системной раскладки с английской на немецкую в X11 отображает `DE` в Orbit Native. [Результат](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43568090270)
+- На Wayland индикатор раскладки получает метку от KWin через D-Bus. В Weston проверен переход с `EN` на `DE` через тестовый сервис KWin. [Результат](https://github.com/TrashDokiDoki/Orbit-Native/actions/runs/43569013490)
 
 ### Установщики WebView Preview
 
