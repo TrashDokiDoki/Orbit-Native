@@ -440,7 +440,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: OrbitShell-windows-installer-universal
-      - name: Verify installation, native architecture, launch and removal
+      - name: Verify installation, native architecture, launch, reinstall and removal
         shell: pwsh
         run: |
           $installer = Get-Item OrbitNative-*-Windows.exe
@@ -482,5 +482,17 @@ jobs:
             pwsh -NoProfile -Sta -File shell/tests/windows-plain-paste.ps1 -Executable $exe
             if ($LASTEXITCODE -ne 0) { throw 'Plain-text paste test failed' }
           }
+          $profile = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'OrbitNative/Orbit Native Shell'
+          $profileProbe = Join-Path $profile 'installer-ci-probe.txt'
+          New-Item -ItemType Directory -Path $profile -Force | Out-Null
+          Set-Content -LiteralPath $profileProbe -Value 'Keep user data'
+          $reinstall = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$dest") -WindowStyle Hidden -Wait -PassThru
+          if ($reinstall.ExitCode -ne 0 -or !(Test-Path -LiteralPath $exe) -or
+              (Get-Content -LiteralPath $profileProbe -Raw).Trim() -ne 'Keep user data') {
+            throw 'Reinstall failed or modified user data'
+          }
           $remove = Start-Process -FilePath (Join-Path $dest 'Uninstall.exe') -ArgumentList '/S' -WindowStyle Hidden -Wait -PassThru
           if ($remove.ExitCode -ne 0 -or (Test-Path $exe)) { throw 'Uninstall failed' }
+          if ((Get-Content -LiteralPath $profileProbe -Raw).Trim() -ne 'Keep user data') {
+            throw 'Uninstall modified user data'
+          }
