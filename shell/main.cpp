@@ -947,9 +947,12 @@ private:
                     const height = window.orbitTestWaylandDesktop ? 960 : 64;
                     for (let i=0; i<60 && canvas.width!==width; i++) await new Promise(resolve=>setTimeout(resolve,50));
                     const decoded = canvas.width === width && canvas.height === height;
+                    const reopened = await orbit.capture('edit');
                     const color = await orbit.color('#7856aa');
                     const copied = await orbit.captureResult({action:'copy',data:canvas.toDataURL('image/png')});
-                    window.orbitShellTest(decoded && color === true && copied?.ok === true && typeof window.jsQR === 'function');
+                    window.orbitShellTest(decoded && reopened === true && color === true &&
+                      copied?.ok === true && typeof window.jsQR === 'function',
+                      {stage:'capture editor', decoded, reopened, color, copied});
                   });
                 });
             )JS");
@@ -2209,7 +2212,16 @@ private:
             done(error(QStringLiteral("Неизвестный режим захвата")));
             return;
         }
-        if (capturePending_ || !snapshot_.isEmpty()) { done(error(QStringLiteral("Редактор уже открыт"))); return; }
+        if (editor_ && !snapshot_.isEmpty()) {
+#ifdef Q_OS_WIN
+            SetForegroundWindow(static_cast<HWND>(webview_get_window(editor_)));
+#elif defined(Q_OS_LINUX)
+            gtk_window_present(GTK_WINDOW(webview_get_window(editor_)));
+#endif
+            done(true);
+            return;
+        }
+        if (capturePending_) { done(error(QStringLiteral("Снимок уже выполняется"))); return; }
         capturePending_ = true;
         if (!settings_.value("showInCapture").toBool()) visible(main_, false);
         QTimer::singleShot(testing_ ? 0 : 220, this, [this, mode, done] {
@@ -2746,7 +2758,7 @@ private:
             refreshMemoryTarget();
             emitTo(main_, "recording", recording_);
             respond(true);
-        } else if (command == "capture" && window == main_) {
+        } else if (command == "capture" && (window == main_ || (testing_ && window == editor_))) {
             capture(first.toString(), respond);
         } else if (command == "capture-ready" && window == editor_) {
             if (testing_) std::fprintf(stderr, "Orbit smoke: editor requested screenshot\n");
