@@ -543,13 +543,14 @@ private:
             updateX11Visibility();
         }
 #endif
-        if (keyboardKnown_ && caps == caps_ && layout == layout_ && inactive == inactive_ &&
+        if (keyboardKnown_ && caps == caps_ && layout == layout_ && label == layoutLabel_ && inactive == inactive_ &&
             battery == battery_ && plugged == plugged_) return;
         const bool notifyCaps = keyboardKnown_ && caps != caps_;
-        const bool notifyLayout = keyboardKnown_ && layout != layout_ && !label.isEmpty();
+        const bool notifyLayout = keyboardKnown_ && label != layoutLabel_ && !label.isEmpty();
         keyboardKnown_ = true;
         caps_ = caps;
         layout_ = layout;
+        layoutLabel_ = label;
         inactive_ = inactive;
         battery_ = battery;
         plugged_ = plugged;
@@ -604,7 +605,8 @@ private:
             };
         }
         const QJsonObject snapshot{{"media", media}, {"sources", QJsonArray::fromStringList(track.sources)},
-                                   {"caps", caps_}, {"layout", layout_}, {"inactive", inactive_}, {"battery", battery_},
+                                   {"caps", caps_}, {"layout", layout_}, {"layoutLabel", layoutLabel_},
+                                   {"inactive", inactive_}, {"battery", battery_},
                                    {"plugged", plugged_}, {"restricted", restricted_}};
         if (lastSystem_ == snapshot) return;
         lastSystem_ = snapshot;
@@ -2809,6 +2811,7 @@ private:
     bool lowMemory_ = false;
 #endif
     int layout_ = 0;
+    QString layoutLabel_;
     bool caps_ = false;
     bool inactive_ = false;
     bool keyboardKnown_ = false;
