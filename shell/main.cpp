@@ -74,6 +74,7 @@
 #include <QDBusPendingCall>
 #include <QDBusPendingCallWatcher>
 #include <QDBusArgument>
+#include <QDBusServiceWatcher>
 #include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
 #include <gdk/gdkx.h>
@@ -104,6 +105,9 @@ QJsonObject object(const QString &file)
 QJsonObject error(const QString &text) { return {{"error", text}}; }
 
 class OrbitShellController final : public QObject {
+#ifdef Q_OS_LINUX
+    Q_OBJECT
+#endif
 public:
     OrbitShellController(QString directory, bool testing)
         : directory_(std::move(directory)), testing_(testing), media_(this),
@@ -210,9 +214,15 @@ public:
             if (wayland_) {
                 portalShortcuts_ = std::make_unique<PortalShortcuts>(this);
                 if (qEnvironmentVariable("XDG_CURRENT_DESKTOP").split(':').contains("KDE", Qt::CaseInsensitive)) {
-                    auto *layoutPoll = new QTimer(this);
-                    connect(layoutPoll, &QTimer::timeout, this, &OrbitShellController::refreshKdeLayout);
-                    layoutPoll->start(2500);
+                    auto bus = QDBusConnection::sessionBus();
+                    bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
+                                "layoutChanged", this, SLOT(refreshKdeLayout()));
+                    bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
+                                "layoutsReconfigured", this, SLOT(refreshKdeLayout()));
+                    auto *watcher = new QDBusServiceWatcher("org.kde.keyboard", bus,
+                        QDBusServiceWatcher::WatchForOwnerChange, this);
+                    connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this,
+                            [this] { refreshKdeLayout(); });
                     refreshKdeLayout();
                 }
             } else if (x11_) x11Input_ = std::make_unique<X11Input>();
@@ -524,22 +534,29 @@ private:
     }
 
 #ifdef Q_OS_LINUX
-    void refreshKdeLayout()
+    Q_SLOT void refreshKdeLayout()
     {
+        const auto revision = ++kdeLayoutRevision_;
         const auto bus = QDBusConnection::sessionBus();
         auto query = [](const QString &method) {
             return QDBusMessage::createMethodCall("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts", method);
         };
         auto *active = new QDBusPendingCallWatcher(bus.asyncCall(query("getLayout"), 1000), this);
-        connect(active, &QDBusPendingCallWatcher::finished, this, [this, active, bus, query] {
+        connect(active, &QDBusPendingCallWatcher::finished, this, [this, active, bus, query, revision] {
             const auto reply = active->reply();
             active->deleteLater();
-            if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) return;
+            if (revision != kdeLayoutRevision_) return;
+            if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) {
+                kdeLayoutLabel_.clear();
+                updateKeyboard();
+                return;
+            }
             const auto index = reply.arguments().first().toUInt();
             auto *layouts = new QDBusPendingCallWatcher(bus.asyncCall(query("getLayoutsList"), 1000), this);
-            connect(layouts, &QDBusPendingCallWatcher::finished, this, [this, layouts, index] {
+            connect(layouts, &QDBusPendingCallWatcher::finished, this, [this, layouts, index, revision] {
                 const auto reply = layouts->reply();
                 layouts->deleteLater();
+                if (revision != kdeLayoutRevision_) return;
                 if (reply.type() != QDBusMessage::ReplyMessage || reply.arguments().isEmpty()) return;
                 const auto value = reply.arguments().first();
                 if (value.metaType() != QMetaType::fromType<QDBusArgument>()) return;
@@ -2895,6 +2912,7 @@ private:
     QString layoutLabel_;
 #ifdef Q_OS_LINUX
     QString kdeLayoutLabel_;
+    quint64 kdeLayoutRevision_ = 0;
 #endif
     bool caps_ = false;
     bool inactive_ = false;
@@ -2949,3 +2967,7 @@ int main(int argc, char *argv[])
     OrbitShellController shell(path, args.contains("--smoke-test"));
     return shell.run();
 }
+
+#ifdef Q_OS_LINUX
+#include "main.moc"
+#endif
