@@ -65,6 +65,7 @@
 #include <wrl.h>
 #elif defined(Q_OS_LINUX)
 #include "x11_input.h"
+#include "kde_layout_listener.h"
 #include "portal_screenshot.h"
 #include "wayland_video_encoder.h"
 #include "portal_shortcuts.h"
@@ -105,9 +106,6 @@ QJsonObject object(const QString &file)
 QJsonObject error(const QString &text) { return {{"error", text}}; }
 
 class OrbitShellController final : public QObject {
-#ifdef ORBIT_KWIN_LAYOUT_DBUS
-    Q_OBJECT
-#endif
 public:
     OrbitShellController(QString directory, bool testing)
         : directory_(std::move(directory)), testing_(testing), media_(this),
@@ -220,10 +218,12 @@ public:
             qEnvironmentVariable("XDG_CURRENT_DESKTOP").split(':').contains("KDE", Qt::CaseInsensitive)) {
             updateKeyboard();
             auto bus = QDBusConnection::sessionBus();
+            auto *listener = new KdeLayoutListener(this);
+            connect(listener, &KdeLayoutListener::changed, this, &OrbitShellController::refreshKdeLayout);
             bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
-                        "layoutChanged", this, SLOT(refreshKdeLayout()));
+                        "layoutChanged", listener, SLOT(onLayoutChanged(uint)));
             bus.connect("org.kde.keyboard", "/Layouts", "org.kde.KeyboardLayouts",
-                        "layoutsReconfigured", this, SLOT(refreshKdeLayout()));
+                        "layoutsReconfigured", listener, SLOT(onLayoutsReconfigured()));
             auto *watcher = new QDBusServiceWatcher("org.kde.keyboard", bus,
                 QDBusServiceWatcher::WatchForOwnerChange, this);
             connect(watcher, &QDBusServiceWatcher::serviceOwnerChanged, this,
@@ -538,8 +538,8 @@ private:
         return steamDownload_.isEmpty();
     }
 
-#ifdef ORBIT_KWIN_LAYOUT_DBUS
-    Q_SLOT void refreshKdeLayout()
+#ifdef Q_OS_LINUX
+    void refreshKdeLayout()
     {
         const auto revision = ++kdeLayoutRevision_;
         const auto bus = QDBusConnection::sessionBus();
@@ -815,6 +815,13 @@ private:
                 document.addEventListener('DOMContentLoaded', async () => {
                   const initial = await orbit.get();
                   if (window.orbitExpectKeyboardLayout) {
+                    const status = document.querySelector('#system-status');
+                    for (let i = 0; i < 40 && !status.textContent.startsWith('EN ·'); ++i)
+                      await new Promise(resolve => setTimeout(resolve, 75));
+                    if (!status.textContent.startsWith('EN ·')) {
+                      window.orbitShellTest(false, {stage:'initial keyboard layout', status:status.textContent});
+                      return;
+                    }
                     let changed;
                     orbit.onLayout(label => { changed = label; });
                     const started = await window.orbitTestSetGermanLayout?.();
@@ -2977,7 +2984,3 @@ int main(int argc, char *argv[])
     OrbitShellController shell(path, args.contains("--smoke-test"));
     return shell.run();
 }
-
-#ifdef ORBIT_KWIN_LAYOUT_DBUS
-#include "main.moc"
-#endif
